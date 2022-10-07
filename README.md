@@ -11,3 +11,12 @@ This is a repo for assignments related Product Design EC601
 
 - Contained in `./RoboticConfigurator`
 - Contains code and documentation for the semester long project
+
+## Project 2
+
+### Phase 1
+
+Located in `./Project2`
+
+- Setup Frontend React Web
+- Setup Backend Rust app (more details in READMEs in that directory)
