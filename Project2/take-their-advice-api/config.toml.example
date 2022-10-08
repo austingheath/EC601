@@ -1,0 +1,5 @@
+# The contents of this file should go in .cargo/config.toml
+
+[env]
+GOOGLE_NLP_BEARER_TOKEN = "<nlp token>"
+TWITTER_BEARER_TOKEN = "<twitter token>"
