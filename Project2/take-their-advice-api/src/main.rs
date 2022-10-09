@@ -59,14 +59,15 @@ async fn make_twitter_get_request<TData:DeserializeOwned>(endpoint: &str) -> Res
     return result;
 }
 
- async fn analyze_sentiment(text: &str) -> Result<NLPResponse, Error> {
+ async fn analyze_sentiment(text: &str) -> Result<NLPResponse, String> {
     let url = GOOGLE_NLP_URL.to_owned() + "/documents:analyzeSentiment";
-    let bearer_token = "Bearer ".to_owned() + GOOGLE_NLP_BEARER_TOKEN;
 
     // Setup headers
     let mut headers = HeaderMap::new();
     headers.insert("Content-Type", "application/json".parse().unwrap());
-    headers.insert("Authorization", bearer_token.parse().unwrap());
+
+    // Setup query params
+    let url_query_params = [("key", GOOGLE_NLP_BEARER_TOKEN)];
 
     // Setup body
     let mut document = HashMap::new();
@@ -78,9 +79,18 @@ async fn make_twitter_get_request<TData:DeserializeOwned>(endpoint: &str) -> Res
 
     // Make GET request
     let client = reqwest::Client::new();
-    let result = client.post(url).headers(headers).json(&body).send().await?.json::<NLPResponse>().await;
+    let response = client.post(url).headers(headers).query(&url_query_params).json(&body).send().await.unwrap();
 
-    return result;
+    match response.status() {
+        reqwest::StatusCode::OK => {
+            match response.json::<NLPResponse>().await {
+                Ok(parsed) => Ok(parsed),
+                Err(e) => Err(e.to_string()),
+            }
+        },
+        reqwest::StatusCode::UNAUTHORIZED => Err("Unauthorized call to Google NLP.".to_string()),
+        other => Err(format!("Unexpected status code {}", other)),
+    }
 }
 
 #[get("/<id>")]
@@ -94,10 +104,10 @@ async fn tweet_sentiment(id: &str) -> Result<String, String> {
             
             match sentiment_response {
                 Ok(sentiment) => Ok(sentiment.documentSentiment.score.to_string()),
-                Err(e) => Err("Couldn't get sentiment".to_string())
+                Err(e) => Err(e.to_string())
             }
         },
-        Err(e) => Err("Couldn't make twitter request".to_string())
+        Err(e) => Err(e.to_string())
     }
 }
 
