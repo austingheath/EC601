@@ -1,3 +1,4 @@
+use futures::Stream;
 use reqwest::{header::HeaderMap, Response};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -5,7 +6,7 @@ const TWITTER_URL: &str = "https://api.twitter.com/2";
 const TWITTER_BEARER_TOKEN: &'static str =
     env!("TWITTER_BEARER_TOKEN", "$TWITTER_BEARER_TOKEN is not set");
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TwitterUser {
     pub id: String,
     pub username: String,
@@ -17,6 +18,30 @@ pub struct TwitterTweet {
     pub id: String,
     pub text: String,
     pub edit_history_tweet_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TwitterTweetStreamAddRule {
+    pub value: String,
+    pub tag: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct TwitterTweetStreamDelete {
+    pub ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct TwitterModifyTweetStreamRequest {
+    pub add: Vec<TwitterTweetStreamAddRule>,
+    pub delete: Option<TwitterTweetStreamDelete>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct TwitterTweetStreamRule {
+    pub value: String,
+    pub tag: String,
+    pub id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -97,6 +122,23 @@ pub async fn post<TResponse: DeserializeOwned, TBody: Serialize>(
     process_reponse(response).await
 }
 
+pub async fn stream(
+    endpoint: String,
+) -> Result<impl Stream<Item = Result<warp::hyper::body::Bytes, reqwest::Error>>, ErrorResponse> {
+    let url = TWITTER_URL.to_owned() + &endpoint;
+    let client = reqwest::Client::new();
+
+    let result = client.get(url).headers(prepare_headers()).send().await;
+
+    match result {
+        Ok(s) => Ok(s.bytes_stream()),
+        Err(e) => Err(ErrorResponse {
+            error: e.to_string(),
+            status_code: reqwest::StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+        }),
+    }
+}
+
 fn prepare_headers() -> HeaderMap {
     let bearer_token = "Bearer ".to_owned() + TWITTER_BEARER_TOKEN;
 
@@ -110,7 +152,9 @@ async fn process_reponse<TResponse: DeserializeOwned>(
     response: Response,
 ) -> Result<TResponse, ErrorResponse> {
     match response.status() {
-        reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::OK => {
+        reqwest::StatusCode::BAD_REQUEST
+        | reqwest::StatusCode::OK
+        | reqwest::StatusCode::CREATED => {
             match response.json::<TwitterResponse<TResponse>>().await {
                 Ok(parsed) => match parsed {
                     TwitterResponse::Valid(res) => Ok(res.data),

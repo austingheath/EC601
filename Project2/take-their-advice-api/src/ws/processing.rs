@@ -8,8 +8,17 @@ use uuid::Uuid;
 use warp::{ws::Message, Error};
 
 use crate::{
-    twitter::{self, requests::TwitterUser},
-    ws::messages::{ServerError, ServerMessageData},
+    twitter::{
+        self,
+        requests::{
+            TwitterModifyTweetStreamRequest, TwitterTweetStreamAddRule, TwitterTweetStreamRule,
+            TwitterUser,
+        },
+    },
+    ws::{
+        connection::StreamingUserInfo,
+        messages::{ServerError, ServerMessageData},
+    },
 };
 
 pub async fn client_msg(id: &str, msg: Message, clients: &connection::Clients) {
@@ -64,6 +73,80 @@ pub async fn client_msg(id: &str, msg: Message, clients: &connection::Clients) {
                     ),
                     client.sender,
                 ),
+            }
+        }
+        ClientMessageData::WatchTwitterUser(request) => {
+            match client.streaming_user_info {
+                Some(_) => {
+                    send_message(
+                        gen_server_err_response(
+                            "This client is already watching a user".to_string(),
+                            "400".to_string(),
+                            Some(client_message.reference_id),
+                        ),
+                        client.sender,
+                    );
+
+                    return;
+                }
+                None => {}
+            }
+
+            // Register the username rule
+            let tag_name = format!("{}_{}", id, request.username);
+            let endpoint = "/tweets/search/stream/rules".to_string();
+            let body = TwitterModifyTweetStreamRequest {
+                add: [TwitterTweetStreamAddRule {
+                    tag: tag_name.clone(),
+                    value: format!("from:{}", request.username),
+                }]
+                .to_vec(),
+                delete: None,
+            };
+
+            let twitter_res = twitter::requests::post::<
+                Vec<TwitterTweetStreamRule>,
+                TwitterModifyTweetStreamRequest,
+            >(endpoint, body)
+            .await;
+
+            let tag = match twitter_res {
+                Ok(res) => match res.into_iter().find(|x| x.tag == tag_name) {
+                    Some(tag) => tag,
+                    None => {
+                        send_message(
+                            gen_server_err_response(
+                                format!("Could not find the tag {}", tag_name.clone()),
+                                500.to_string(),
+                                Some(client_message.reference_id),
+                            ),
+                            client.sender,
+                        );
+
+                        return;
+                    }
+                },
+                Err(e) => {
+                    send_message(
+                        gen_server_err_response(
+                            e.error,
+                            e.status_code.to_string(),
+                            Some(client_message.reference_id),
+                        ),
+                        client.sender,
+                    );
+
+                    return;
+                }
+            };
+
+            // Write watch to client
+            let mut locked = clients.write().await;
+            if let Some(v) = locked.get_mut(id) {
+                v.streaming_user_info = Some(StreamingUserInfo {
+                    username: request.username,
+                    rule_id: tag.id.clone(),
+                })
             }
         }
     }

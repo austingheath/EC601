@@ -21,6 +21,7 @@ pub struct ServerMessage {
 pub enum ClientMessageData {
     Subscribe(TopicsRequest),
     FindUser(FindTwitterUser),
+    WatchTwitterUser(WatchTwitterUser),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -37,6 +38,11 @@ pub struct TopicsRequest {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FindTwitterUser {
+    pub username: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct WatchTwitterUser {
     pub username: String,
 }
 
