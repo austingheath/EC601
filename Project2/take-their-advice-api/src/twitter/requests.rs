@@ -62,9 +62,9 @@ pub enum TwitterResponse<TResponse> {
 }
 
 pub async fn get<TResponse: DeserializeOwned>(
-    endpoint: &str,
-) -> Result<TwitterResponse<TResponse>, ErrorResponse> {
-    let url = TWITTER_URL.to_owned() + endpoint;
+    endpoint: String,
+) -> Result<TResponse, ErrorResponse> {
+    let url = TWITTER_URL.to_owned() + &endpoint;
 
     // Make request
     let client = reqwest::Client::new();
@@ -79,10 +79,10 @@ pub async fn get<TResponse: DeserializeOwned>(
 }
 
 pub async fn post<TResponse: DeserializeOwned, TBody: Serialize>(
-    endpoint: &str,
+    endpoint: String,
     body: TBody,
-) -> Result<TwitterResponse<TResponse>, ErrorResponse> {
-    let url = TWITTER_URL.to_owned() + endpoint;
+) -> Result<TResponse, ErrorResponse> {
+    let url = TWITTER_URL.to_owned() + &endpoint;
 
     // Make request
     let client = reqwest::Client::new();
@@ -108,11 +108,33 @@ fn prepare_headers() -> HeaderMap {
 
 async fn process_reponse<TResponse: DeserializeOwned>(
     response: Response,
-) -> Result<TwitterResponse<TResponse>, ErrorResponse> {
+) -> Result<TResponse, ErrorResponse> {
     match response.status() {
         reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::OK => {
             match response.json::<TwitterResponse<TResponse>>().await {
-                Ok(parsed) => Ok(parsed),
+                Ok(parsed) => match parsed {
+                    TwitterResponse::Valid(res) => Ok(res.data),
+                    TwitterResponse::Error(e) => {
+                        if e.errors.len() == 0 {
+                            return Err(ErrorResponse {
+                                error: "An unknown twitter error occurred".to_string(),
+                                status_code: reqwest::StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                            });
+                        }
+
+                        let first_err = &e.errors[0];
+
+                        let message = match first_err {
+                            TwitterApiError::Type1(e) => &e.detail,
+                            TwitterApiError::Type2(e) => &e.message,
+                        };
+
+                        Err(ErrorResponse {
+                            error: message.to_string(),
+                            status_code: reqwest::StatusCode::BAD_REQUEST.as_u16(),
+                        })
+                    }
+                },
                 Err(e) => Err(ErrorResponse {
                     error: e.to_string(),
                     status_code: reqwest::StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
