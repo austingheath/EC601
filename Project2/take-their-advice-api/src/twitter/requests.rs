@@ -22,6 +22,14 @@ pub struct TwitterTweet {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TwitterTweetWithAuthor {
+    pub id: String,
+    pub text: String,
+    pub edit_history_tweet_ids: Vec<String>,
+    pub author_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TwitterTweetStreamAddRule {
     pub value: String,
     pub tag: String,
@@ -202,7 +210,7 @@ async fn process_reponse<TResponse: DeserializeOwned>(
             }
         }
         reqwest::StatusCode::NOT_FOUND => Err(ErrorResponse {
-            error: "Not found (404) call to Twitter API.".to_string(),
+            error: format!("Not found (404) call to Twitter API:{}", response.url()),
             status_code: response.status().as_u16(),
         }),
         reqwest::StatusCode::UNAUTHORIZED => Err(ErrorResponse {

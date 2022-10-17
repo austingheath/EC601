@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::twitter::requests::TwitterUser;
+use crate::twitter::requests::{TwitterTweetWithAuthor, TwitterUser};
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +33,7 @@ pub enum ClientMessageData {
 pub enum ServerMessageData {
     Error(ServerError),
     TwitterUser(TwitterUser),
+    FoundTweet(TwitterTweetWithAuthor),
 }
 
 #[derive(Serialize, Deserialize, Debug)]

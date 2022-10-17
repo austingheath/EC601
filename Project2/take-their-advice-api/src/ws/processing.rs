@@ -1,7 +1,8 @@
 use super::{
-    connection,
+    connection::{self, Clients},
     messages::{self, ClientMessage, ClientMessageData, ServerMessage},
 };
+use futures::StreamExt;
 use serde_json::from_str;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
@@ -11,8 +12,8 @@ use crate::{
     twitter::{
         self,
         requests::{
-            TwitterModifyTweetStreamRequest, TwitterTweetStreamAddRule, TwitterTweetStreamRule,
-            TwitterUser,
+            TwitterModifyTweetStreamRequest, TwitterResponse, TwitterTweetStreamAddRule,
+            TwitterTweetStreamRule, TwitterTweetWithAuthor, TwitterUser,
         },
     },
     ws::{
@@ -92,6 +93,26 @@ pub async fn client_msg(id: &str, msg: Message, clients: &connection::Clients) {
                 None => {}
             }
 
+            // Make sure the user actually exists
+            let user_endpoint = format!("/users/by/username/{}", request.username);
+            let twitter_user_res = twitter::requests::get::<TwitterUser>(user_endpoint).await;
+
+            let user = match twitter_user_res {
+                Ok(res) => res,
+                Err(e) => {
+                    send_message(
+                        gen_server_err_response(
+                            e.error,
+                            e.status_code.to_string(),
+                            Some(client_message.reference_id),
+                        ),
+                        client.sender,
+                    );
+
+                    return;
+                }
+            };
+
             // Register the username rule
             let tag_name = format!("{}_{}", id, request.username);
             let endpoint = "/tweets/search/stream/rules".to_string();
@@ -146,9 +167,82 @@ pub async fn client_msg(id: &str, msg: Message, clients: &connection::Clients) {
             let mut locked = clients.write().await;
             if let Some(v) = locked.get_mut(id) {
                 v.streaming_user_info = Some(StreamingUserInfo {
-                    username: request.username,
+                    user,
                     rule_id: tag.id.clone(),
                 })
+            }
+        }
+    }
+}
+
+pub async fn stream_tweets(clients: Clients) {
+    println!("Starting tweet watch thread");
+
+    // Block until there is a client that is watching a user
+    'outer: loop {
+        for (_, value) in clients.read().await.iter() {
+            if let Some(_) = &value.streaming_user_info {
+                break 'outer;
+            }
+        }
+    }
+
+    println!("Done blocking. Starting to stream tweets.");
+
+    // Start streaming tweets
+    let stream_res =
+        twitter::requests::stream("/tweets/search/stream?tweet.fields=author_id".to_string()).await;
+
+    let mut stream = match stream_res {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Could not setup stream {}", e.error);
+            return;
+        }
+    };
+
+    while let Some(chunk) = stream.next().await {
+        let str_data = match chunk {
+            Ok(data) => match std::string::String::from_utf8(data.to_vec()) {
+                Ok(st) => st,
+                Err(e) => {
+                    println!("Error parsing chunk: {}", e.to_string());
+                    break;
+                }
+            },
+            Err(e) => {
+                println!("Error processing chunk: {}", e.to_string());
+                break;
+            }
+        };
+
+        let tweet = match serde_json::from_str::<TwitterResponse<TwitterTweetWithAuthor>>(&str_data)
+        {
+            Ok(t) => match t {
+                TwitterResponse::Error(_) => {
+                    println!("Can't parse got twitter error response on {}", str_data);
+                    continue;
+                }
+                TwitterResponse::Valid(tw) => tw.data,
+            },
+            Err(e) => {
+                println!("Can't parse {}, got error {}", str_data, e.to_string());
+                continue;
+            }
+        };
+
+        println!("Tweet parsed: {}", tweet.author_id);
+
+        // Send tweet to client with sentiment
+        for (_, value) in clients.read().await.iter() {
+            if let Some(info) = &value.streaming_user_info {
+                if info.user.id.eq(&tweet.author_id) {
+                    send_message(
+                        gen_server_response(ServerMessageData::FoundTweet(tweet), None),
+                        value.sender.clone(),
+                    );
+                    break;
+                }
             }
         }
     }

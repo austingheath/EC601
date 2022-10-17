@@ -12,7 +12,7 @@ use warp::ws::Message;
 
 use crate::twitter;
 use crate::twitter::requests::{
-    TwitterModifyTweetStreamRequest, TwitterTweetStreamDelete, TwitterTweetStreamRule,
+    TwitterModifyTweetStreamRequest, TwitterTweetStreamDelete, TwitterTweetStreamRule, TwitterUser,
 };
 use crate::ws::processing::client_msg;
 
@@ -20,7 +20,7 @@ pub type Clients = Arc<RwLock<HashMap<String, Client>>>;
 
 #[derive(Debug, Clone)]
 pub struct StreamingUserInfo {
-    pub username: String,
+    pub user: TwitterUser,
     pub rule_id: String,
 }
 
