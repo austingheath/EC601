@@ -7,6 +7,7 @@ const TWITTER_BEARER_TOKEN: &'static str =
     env!("TWITTER_BEARER_TOKEN", "$TWITTER_BEARER_TOKEN is not set");
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct TwitterUser {
     pub id: String,
     pub username: String,
@@ -33,7 +34,7 @@ pub struct TwitterTweetStreamDelete {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TwitterModifyTweetStreamRequest {
-    pub add: Vec<TwitterTweetStreamAddRule>,
+    pub add: Option<Vec<TwitterTweetStreamAddRule>>,
     pub delete: Option<TwitterTweetStreamDelete>,
 }
 
@@ -52,7 +53,7 @@ pub struct ErrorResponse {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TwitterApiType1Error {
-    pub detail: String,
+    pub detail: Option<String>,
     pub title: String,
     pub r#type: String,
 }
@@ -155,7 +156,19 @@ async fn process_reponse<TResponse: DeserializeOwned>(
         reqwest::StatusCode::BAD_REQUEST
         | reqwest::StatusCode::OK
         | reqwest::StatusCode::CREATED => {
-            match response.json::<TwitterResponse<TResponse>>().await {
+            let res_text = response.text().await;
+
+            let text = match res_text {
+                Ok(text) => text,
+                Err(e) => {
+                    return Err(ErrorResponse {
+                        error: e.to_string(),
+                        status_code: reqwest::StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    })
+                }
+            };
+
+            match serde_json::from_str::<TwitterResponse<TResponse>>(&text) {
                 Ok(parsed) => match parsed {
                     TwitterResponse::Valid(res) => Ok(res.data),
                     TwitterResponse::Error(e) => {
@@ -169,7 +182,7 @@ async fn process_reponse<TResponse: DeserializeOwned>(
                         let first_err = &e.errors[0];
 
                         let message = match first_err {
-                            TwitterApiError::Type1(e) => &e.detail,
+                            TwitterApiError::Type1(e) => &e.title,
                             TwitterApiError::Type2(e) => &e.message,
                         };
 
@@ -179,10 +192,13 @@ async fn process_reponse<TResponse: DeserializeOwned>(
                         })
                     }
                 },
-                Err(e) => Err(ErrorResponse {
-                    error: e.to_string(),
-                    status_code: reqwest::StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                }),
+                Err(_) => {
+                    println!("Couldn't parse {} to result", text);
+                    Err(ErrorResponse {
+                        error: format!("Couldn't parse {} to result", text),
+                        status_code: reqwest::StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    })
+                }
             }
         }
         reqwest::StatusCode::NOT_FOUND => Err(ErrorResponse {

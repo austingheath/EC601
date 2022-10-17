@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::twitter::requests::TwitterUser;
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct ClientMessage {
     pub reference_id: String,
     pub data: ClientMessageData,
@@ -10,6 +11,7 @@ pub struct ClientMessage {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct ServerMessage {
     pub reference_id: String,
     pub data: ServerMessageData,
@@ -18,6 +20,7 @@ pub struct ServerMessage {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
+#[serde(rename_all = "camelCase")]
 pub enum ClientMessageData {
     Subscribe(TopicsRequest),
     FindUser(FindTwitterUser),
@@ -26,27 +29,32 @@ pub enum ClientMessageData {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
+#[serde(rename_all = "camelCase")]
 pub enum ServerMessageData {
     Error(ServerError),
     TwitterUser(TwitterUser),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct TopicsRequest {
     pub topics: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct FindTwitterUser {
     pub username: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct WatchTwitterUser {
     pub username: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct ServerError {
     pub message: String,
     pub code: String,

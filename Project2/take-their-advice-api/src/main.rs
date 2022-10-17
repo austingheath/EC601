@@ -2,6 +2,7 @@ use futures::StreamExt;
 use std::sync::Arc;
 use std::{collections::HashMap, convert::Infallible};
 use take_their_advice_api::twitter;
+use take_their_advice_api::twitter::requests::{TwitterResponse, TwitterTweet};
 use take_their_advice_api::{controllers, ws::connection::Clients};
 use tokio::sync::RwLock;
 use warp::Filter;
@@ -46,7 +47,7 @@ async fn stream_tweets(clients: Clients) {
     println!("Done blocking. Starting to stream tweets.");
 
     // Start streaming tweets
-    let stream_res = twitter::requests::stream("/tweets/search/stream/rules".to_string()).await;
+    let stream_res = twitter::requests::stream("/tweets/search/stream".to_string()).await;
 
     let mut stream = match stream_res {
         Ok(r) => r,
@@ -56,7 +57,42 @@ async fn stream_tweets(clients: Clients) {
         }
     };
 
-    while let Some(item) = stream.next().await {
-        println!("Chunk: {:?}", item);
+    while let Some(chunk) = stream.next().await {
+        let str_data = match chunk {
+            Ok(data) => match std::string::String::from_utf8(data.to_vec()) {
+                Ok(st) => st,
+                Err(e) => {
+                    println!("Error parsing chunk: {}", e.to_string());
+                    break;
+                }
+            },
+            Err(e) => {
+                println!("Error processing chunk: {}", e.to_string());
+                break;
+            }
+        };
+
+        let tweet = match serde_json::from_str::<TwitterResponse<TwitterTweet>>(&str_data) {
+            Ok(t) => match t {
+                TwitterResponse::Error(_) => {
+                    println!("Can't parse got twitter error response on {}", str_data);
+                    continue;
+                }
+                TwitterResponse::Valid(tw) => tw.data,
+            },
+            Err(e) => {
+                println!("Can't parse {}, got error {}", str_data, e.to_string());
+                continue;
+            }
+        };
+
+        // Send tweet to client with sentiment
+        for (_, value) in clients.read().await.iter() {
+            if let Some(user) = &value.streaming_user_info {
+                if user.username.eq("") {
+                    println!("Found!");
+                }
+            }
+        }
     }
 }

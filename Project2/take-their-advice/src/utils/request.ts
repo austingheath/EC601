@@ -11,14 +11,8 @@ export type Request = {
 };
 
 // Make an HTTP request
-export async function request(req: Request) {
+export async function request<TResponse>(req: Request) {
   const { url, responseMimeType = 'application/json', method = 'GET', body, headers } = req;
-
-  // Build query string
-  // let queryString = '';
-  // if (query != null) {
-  //   queryString = Object.entries(query).map(([key, value]) => );
-  // }
 
   // Build body
   const convertedBody = typeof body === 'object' ? JSON.stringify(body) : body;
@@ -36,10 +30,10 @@ export async function request(req: Request) {
 
   switch (mimeType) {
     case 'application/json': {
-      return response.json();
+      return response.json() as TResponse;
     }
     case 'text/plain': {
-      return response.text();
+      return response.text() as TResponse;
     }
     default: {
       throw new Error(`Mime type ${mimeType} not supported`);

@@ -1,22 +1,16 @@
-import React from "react";
+import React from 'react';
+
+import { RouterProvider } from 'react-router-dom';
+
+import { AdviceProvider } from './providers/AdviceProvider';
+import { router } from './routing/router';
 
 function App() {
+  console.log('hello');
   return (
-    <div className="App">
-      <header className="App-header">
-        <p>
-          Edit <code>src/App.tsx</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
+    <AdviceProvider>
+      <RouterProvider router={router} />
+    </AdviceProvider>
   );
 }
 

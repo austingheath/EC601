@@ -96,11 +96,13 @@ pub async fn client_msg(id: &str, msg: Message, clients: &connection::Clients) {
             let tag_name = format!("{}_{}", id, request.username);
             let endpoint = "/tweets/search/stream/rules".to_string();
             let body = TwitterModifyTweetStreamRequest {
-                add: [TwitterTweetStreamAddRule {
-                    tag: tag_name.clone(),
-                    value: format!("from:{}", request.username),
-                }]
-                .to_vec(),
+                add: Some(
+                    [TwitterTweetStreamAddRule {
+                        tag: tag_name.clone(),
+                        value: format!("from:{}", request.username),
+                    }]
+                    .to_vec(),
+                ),
                 delete: None,
             };
 

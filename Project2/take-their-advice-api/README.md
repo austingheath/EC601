@@ -2,7 +2,7 @@
 
 ## Disclaimer
 
-Written in rust so I can learn the language... probably did it wrong
+Written in Rust so I can learn the language. Probably not the greatest Rust codebase.
 
 ## Project 2 Phase 1
 
@@ -10,3 +10,10 @@ Written in rust so I can learn the language... probably did it wrong
 - Setup an API route for frontend
 - Make GET requests to Twitter API
 - Make NLP sentiment request
+
+# Project 2 Phase 2
+
+- Create a WebSocket server
+- Error handling of Twitter & NLP server
+- Allow WebSocket clients to stream tweets from a particular user of their choice
+- Run sentiment on the tweets as the arrive (bulking should be done in the future)

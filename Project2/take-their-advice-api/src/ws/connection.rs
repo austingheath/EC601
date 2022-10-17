@@ -78,22 +78,26 @@ pub async fn client_connection(ws: WebSocket, clients: Clients) {
     if let Some(info) = client.streaming_user_info {
         let endpoint = "/tweets/search/stream/rules".to_string();
         let body = TwitterModifyTweetStreamRequest {
-            add: [].to_vec(),
+            add: None,
             delete: Some(TwitterTweetStreamDelete {
                 ids: [info.rule_id].to_vec(),
             }),
         };
 
         let twitter_res = twitter::requests::post::<
-            Vec<TwitterTweetStreamRule>,
+            Option<Vec<TwitterTweetStreamRule>>,
             TwitterModifyTweetStreamRequest,
         >(endpoint, body)
         .await;
 
-        // Do nothing with response
+        // Log response
         match twitter_res {
-            Err(_) => {}
-            Ok(_) => {}
+            Err(e) => {
+                print!("Twitter rule NOT removed. {}", e.error);
+            }
+            Ok(_) => {
+                print!("Twitter rule removed.");
+            }
         }
     }
 
