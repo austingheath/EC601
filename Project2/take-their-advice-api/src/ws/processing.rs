@@ -1,14 +1,17 @@
+use std::time::Duration;
+
 use super::{
-    connection::{self, Clients},
+    connection::{self, Client, Clients},
     messages::{self, ClientMessage, ClientMessageData, ServerMessage},
 };
 use futures::StreamExt;
 use serde_json::from_str;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::{sync::mpsc::UnboundedSender, time};
 use uuid::Uuid;
 use warp::{ws::Message, Error};
 
 use crate::{
+    google,
     twitter::{
         self,
         requests::{
@@ -18,7 +21,7 @@ use crate::{
     },
     ws::{
         connection::StreamingUserInfo,
-        messages::{ServerError, ServerMessageData},
+        messages::{SentimentMeasurement, ServerError, ServerMessageData},
     },
 };
 
@@ -169,6 +172,7 @@ pub async fn client_msg(id: &str, msg: Message, clients: &connection::Clients) {
                 v.streaming_user_info = Some(StreamingUserInfo {
                     user,
                     rule_id: tag.id.clone(),
+                    tweet_queue: [].to_vec(),
                 })
             }
         }
@@ -180,16 +184,19 @@ pub async fn stream_tweets(clients: Clients) {
 
     // Block until there is a client that is watching a user
     'outer: loop {
-        for (_, value) in clients.read().await.iter() {
+        let cls = clients.read().await;
+        for (_, value) in cls.iter() {
             if let Some(_) = &value.streaming_user_info {
                 break 'outer;
             }
         }
+
+        time::sleep(Duration::from_secs(1)).await;
     }
 
     println!("Done blocking. Starting to stream tweets.");
 
-    // Start streaming tweets
+    // Start streaming tweets for all clients
     let stream_res =
         twitter::requests::stream("/tweets/search/stream?tweet.fields=author_id".to_string()).await;
 
@@ -231,18 +238,75 @@ pub async fn stream_tweets(clients: Clients) {
             }
         };
 
-        println!("Tweet parsed: {}", tweet.author_id);
+        println!("Tweet parsed: {}", &tweet.author_id);
 
-        // Send tweet to client with sentiment
-        for (_, value) in clients.read().await.iter() {
-            if let Some(info) = &value.streaming_user_info {
-                if info.user.id.eq(&tweet.author_id) {
+        // Search for a matching client
+        let mut locked_clients = clients.write().await;
+        let watching_client: Option<Client> = {
+            for (_, value) in locked_clients.iter_mut() {
+                if let Some(info) = &value.streaming_user_info {
+                    if info.user.id.eq(&tweet.author_id) {
+                        Some(value);
+                        break;
+                    }
+                }
+            }
+
+            None
+        };
+
+        // If there is a matching client, process the tweet
+        if let Some(client) = watching_client {
+            // Stream tweet to client
+            send_message(
+                gen_server_response(ServerMessageData::FoundTweet(tweet.clone()), None),
+                client.sender.clone(),
+            );
+
+            // Add tweet to queue for sentiment processing later
+            if let Some(mut info) = client.streaming_user_info {
+                info.tweet_queue.push(tweet.text);
+            }
+        }
+    }
+}
+
+pub async fn sentiment_calculator(clients: Clients) {
+    println!("Starting sentiment watch thread");
+
+    let mut interval = time::interval(Duration::from_secs(60 * 60));
+    loop {
+        // Process sentiment within every 60 minutes
+        interval.tick().await;
+
+        // Search for clients with tweets to process
+        for (_, value) in clients.write().await.iter_mut() {
+            if let Some(info) = value.streaming_user_info.as_mut() {
+                if info.tweet_queue.len() == 0 {
+                    continue;
+                }
+
+                // Combine the text for the client
+                let combined_text = info.tweet_queue.join(". ").clone();
+
+                // Calculate sentiment for each client
+                let s_result = google::nlp::analyze_sentiment(&combined_text).await;
+
+                if let Ok(sentiment) = s_result {
+                    // Send sentiment to client
                     send_message(
-                        gen_server_response(ServerMessageData::FoundTweet(tweet), None),
+                        gen_server_response(
+                            ServerMessageData::SentimentMeasurement(SentimentMeasurement {
+                                current_sentiment: sentiment,
+                            }),
+                            None,
+                        ),
                         value.sender.clone(),
                     );
-                    break;
                 }
+
+                // Clear the array
+                info.tweet_queue.clear();
             }
         }
     }

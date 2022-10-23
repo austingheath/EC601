@@ -22,6 +22,7 @@ pub type Clients = Arc<RwLock<HashMap<String, Client>>>;
 pub struct StreamingUserInfo {
     pub user: TwitterUser,
     pub rule_id: String,
+    pub tweet_queue: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

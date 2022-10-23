@@ -34,6 +34,7 @@ pub enum ServerMessageData {
     Error(ServerError),
     TwitterUser(TwitterUser),
     FoundTweet(TwitterTweetWithAuthor),
+    SentimentMeasurement(SentimentMeasurement),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -59,4 +60,10 @@ pub struct WatchTwitterUser {
 pub struct ServerError {
     pub message: String,
     pub code: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SentimentMeasurement {
+    pub current_sentiment: f32,
 }

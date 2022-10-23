@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::{collections::HashMap, convert::Infallible};
-use take_their_advice_api::ws::processing::stream_tweets;
+use take_their_advice_api::ws::processing::{sentiment_calculator, stream_tweets};
 use take_their_advice_api::{controllers, ws::connection::Clients};
 use tokio::sync::RwLock;
 use warp::Filter;
@@ -20,10 +20,11 @@ async fn main() {
         .and(health_route.or(ws_route))
         .with(warp::cors().allow_any_origin());
 
-    let t1 = tokio::task::spawn(stream_tweets(clients));
-    let t2 = tokio::task::spawn(warp::serve(routes).run(([127, 0, 0, 1], 8000)));
+    let t1 = tokio::task::spawn(warp::serve(routes).run(([127, 0, 0, 1], 8000)));
+    let t2 = tokio::task::spawn(stream_tweets(clients.clone()));
+    let t3 = tokio::task::spawn(sentiment_calculator(clients.clone()));
 
-    (t1.await.unwrap(), t2.await.unwrap());
+    (t1.await.unwrap(), t2.await.unwrap(), t3.await.unwrap());
 }
 
 fn with_clients(clients: Clients) -> impl Filter<Extract = (Clients,), Error = Infallible> + Clone {
