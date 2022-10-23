@@ -18,3 +18,4 @@ MVP description:
 - A work in progress React Typescript web app in `./take-their-advice`
   - This is not fully complete for Project 2. The API is considered the initial MVP. See the user stories described above
 - A Rust API in `./take-their-advice-api`
+  - See the README in `./take-their-advice-api` to get it up and running for your project
