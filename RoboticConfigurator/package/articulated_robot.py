@@ -106,14 +106,15 @@ class ArticulatedRobot:
                 err = max_displacement * (err / np.linalg.norm(err))
 
             # caculate jacobian
-            j = self.calc_jacobian(ths, pos)
+            j = self.calc_jacobian(ths, final_pos=pos, linear_only=True)
+            j_tp = np.transpose(j)
 
-            j_tp = np.transpose(jac)
-            a_com = j.dot(j_tp).dot(e)
-            a = np.dot(e, a_com) / np.dot(a_com, a_com)
+            # calculate alpha
+            a_com = j.dot(j_tp).dot(err)
+            a = np.dot(err, a_com) / np.dot(a_com, a_com)
 
             # calculate delta theta using the Jacobian transpose
-            d_th = a * j_tp.dot(e)
+            d_th = a * j_tp.dot(err)
 
             # update theta
             ths = ths + d_th
@@ -133,12 +134,14 @@ class ArticulatedRobot:
         joint_angles: Full set of joint angle values for the robot
         [optional] final_pos: The final_pos of the robot given the joint_angles.
             Provide to avoid recalculating it
+        [optional] linear_only: returns the jacobian with only the linear velocities
+            filled in, resulting in a 3xN np.array.
     
     Output:
         The jacobian of the robot given the joint angles.
-        An 6xN np.array, where N is the number of joints
+        Unless linear_only is True returns a 6xN np.array, where N is the number of joints.
     """
-    def calc_jacobian(self, joint_angles: np.array, final_pos: np.array = None):
+    def calc_jacobian(self, joint_angles: np.array, final_pos: np.array = None, linear_only: bool = False):
         if joint_angles.shape[0] != self.num_joints:
             raise Exception("Please provide an angle for each joint")
 
@@ -157,7 +160,7 @@ class ArticulatedRobot:
 
         jacobian.append(init_col)
 
-        for i in range(1, self.num_joints + 1):
+        for i in range(1, self.num_joints):
             # TODO optimize this so it doesn't have to recalculate the intermediate
             # translation matrices each time
             t_mat = self.forward_kinematics(joint_angles, to_joint=i)
@@ -171,7 +174,11 @@ class ArticulatedRobot:
 
             jacobian.append(fin)
 
-        return np.array(jacobian)
+        np_jac = np.array(jacobian).transpose()
+        if linear_only is True:
+            return np_jac[:3, :]
+
+        return np_jac
 
     
     """
