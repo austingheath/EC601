@@ -52,6 +52,21 @@ class ArticulatedRobot:
         # Set radius last. Method relies on fully initialized class.
         self.reachable_radius = self.__reachable_radius()
 
+    """
+    Given a position (x,y,z), see if the robot can reach it.
+
+    While rare, it is possible to get false negatives (a point is reachable, 
+    but this function returned False).
+
+    This is WIP: Make this function smarter and faster. Utilize different inverse kinematic
+    solvers, different thresholds, etc.
+
+    Arguments:
+        target_position: (x, y, z) tuple relative to the base (0) frame
+
+    Output:
+        True if the position is reachable, False if it is not.
+    """
     def is_position_reachable(self, target_position: Tuple[float]) -> bool:
         if len(target_position) != 3:
             raise Exception("Position must be a vector (x,y,z) given in base coordinates")
@@ -62,10 +77,12 @@ class ArticulatedRobot:
         if dist_origin > self.reachable_radius:
             return False
 
-        # Next, it's necessary to solve the IK problem
-        ths = self.inverse_kinematics(target_position)
-
-        return True
+        # Next, it's necessary (and sufficient) to solve the IK problem
+        try:
+            self.inverse_kinematics(target_position, tolerance_threshold=0.1, restart_threshold=100)
+            return True
+        except Exception:
+            return False
 
     """
     Calculate forward kinematics of the robot up to the provided
@@ -105,46 +122,65 @@ class ArticulatedRobot:
     Calculate the inverse kinematics
     Given a point, find a set of thetas that will make the robot reach that point.
 
-    Inverse kinematic solution methods are explored here:
-    http://graphics.cs.cmu.edu/nsp/course/15-464/Spring11/handouts/iksurvey.pdf
+    Other methods include:
+
+    Jacobian Pseudoinverse
+    Cyclic Coordinate Descent
+    Levenberg-Marquardt damped least squares
+    Quasi-Newton, conjugate gradient, Newton-Raphson
+    Neural networks
 
     Arguments:
         target_position: (x, y, z) tuple relative to the base (0) frame
-        solver_method: The method used to calculate the inverse kinematics. Valid methods are: 
+        [optional] solver_method: The method used to calculate the inverse kinematics. Valid methods are: 
             - "jacobian_transpose"
             - More to come. Defaults to "jacobian_transpose"
+        [optional] tolerance_threshold: The allowed error distance from the current position and the target
+            position. Defaults to 0.10
+        [optional] restart_threshold: The number of times the algorithm will restart if it is unable to 
+            reduce error by a particular tolerance. Defaults to 1
 
     Output:
-        A set of joint angles that gets the robot within 0.01 of the specified point
+        A set of joint angles that gets the robot within 0.10 of the specified point
     """
-    def inverse_kinematics(self, target_position: Tuple[float], solver_method: string = "jacobian_transpose") -> np.array:
+    def inverse_kinematics(
+        self, 
+        target_position: Tuple[float], 
+        solver_method: string = "jacobian_transpose", 
+        tolerance_threshold: float = 0.01,
+        restart_threshold: int = 1) -> np.array:
+
         if len(target_position) != 3:
             raise Exception("Position must be a vector (x,y,z) given in base coordinates")
+
+        if tolerance_threshold <= 0:
+            raise Exception("tolerance_threshold must be a value larger than 0")
+
+        if restart_threshold < 0:
+            raise Exception("restart_threshold must be greater than or equal to 0")
 
         # select the algorithm
         if solver_method == "jacobian_transpose":
             solver = self.__jacobian_transpose_solver
         else:
-            raise Exception("The algorithm provided is not supported.")
+            raise Exception("The solver method provided is not supported.")
 
         # set constants
-        allowed_err = 0.01
-        max_displacement = 0.05
+        clamp_threshold = 0.05
         d_th_threshold = math.radians(5) # limit to 5 degrees
+        err_th_threshold = 0.01
+        err_sim_count_threshold = 10
 
         # start calculation at theta = 0
         ths = np.zeros(self.num_joints)
         pos = self.forward_kinematics(ths)[:3, -1]
         err = target_position - pos
+        err_sim_counter = 0
+        restart_counter = 0
 
-        while np.linalg.norm(err) > allowed_err:
-            # clamp error so we make small iterative changes
-            mag_e = np.linalg.norm(err)
-            if mag_e > max_displacement:
-                err = max_displacement * (err / np.linalg.norm(err))
-
+        while np.linalg.norm(err) > tolerance_threshold:
             # caculate change in theta
-            d_th = solver(ths, err)
+            d_th = solver(ths, self.__clamp_err(err, clamp_threshold))
 
             # calculate alpha using the method from
             # https://cseweb.ucsd.edu/classes/wi17/cse169-a/slides/CSE169_09.pdf
@@ -155,7 +191,27 @@ class ArticulatedRobot:
 
             # recalc position and error
             pos = self.forward_kinematics(ths)[:3, -1]
-            err = target_position - pos
+            next_err = target_position - pos
+
+            # check if err changed
+            if np.linalg.norm(err - next_err) < err_th_threshold:
+                err_sim_counter += 1
+            else:
+                err_sim_counter = 0
+
+            # if error hasn't changed in a while, we might be in a local minima
+            if err_sim_counter >= err_sim_count_threshold:
+                if restart_counter + 1 > restart_threshold:
+                    raise Exception("Unable to meet the tolerance threshold", pos)
+
+                # restart with random thetas
+                ths = np.random.normal(0, math.pi, self.num_joints)
+                pos = self.forward_kinematics(ths)[:3, -1]
+                next_err = target_position - pos
+                err_sim_counter = 0
+                restart_counter += 1
+
+            err = next_err
 
         return ths
 
@@ -233,6 +289,26 @@ class ArticulatedRobot:
             [np.sin(th_i) * np.sin(al_i), np.cos(th_i) * np.sin(al_i), np.cos(al_i), np.cos(al_i) * d_i],
             [0, 0, 0, 1],
         ])
+
+    """
+    A utility function for clamping the error
+    Reduces jitter by enforcing an upper bound on the error
+
+    Arguments:
+        err: A (x, y, z) vector representing the error in each dimension
+        [optional] clamp_threshold: Float defining the upper bound.
+            Defaults to 0.05
+    """
+    def __clamp_err(self, err, clamp_threshold: float = 0.05):
+        if clamp_threshold <= 0:
+            raise Exception("clamp_threshold must be greater than 0")
+
+        # clamp error so we make small iterative changes
+        mag_e = np.linalg.norm(err)
+        if mag_e > clamp_threshold:
+            err = clamp_threshold * (err / np.linalg.norm(err))
+
+        return err
 
     """
     Calculates the expected change in theta with the jacobian transpose.
