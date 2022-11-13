@@ -1,3 +1,5 @@
+import math
+import string
 from typing import List, Tuple
 import numpy as np 
 
@@ -7,6 +9,10 @@ ArticulatedRobot
 Represents a simple kinematic robot chain
 with only rotary joints. Prismatic joints
 can be added with ease later.
+
+Assume actuators are placed along the z
+axis at the common normal (the point where
+the x axis and z axis intersect - the origin).
 """
 class ArticulatedRobot:
 
@@ -27,35 +33,63 @@ class ArticulatedRobot:
 
     num_joints: int
 
+    reachable_radius: float
+
     def __init__(self, dh_parameters: List[Tuple[float]]) -> None:
+        if len(dh_parameters) > 7:
+            raise Exception("DH parameters must have 7 DOF or less.")
+        
+        if len(dh_parameters) == 0:
+            raise Exception("DH parameters cannot be empty.")
+
+        for params in dh_parameters:
+            if len(params) != 3:
+                raise Exception("Each set of DH paramters should contain 3 numbers")
+
         self.dh_parameters = np.array(dh_parameters)
         self.num_joints = len(dh_parameters)
 
+        # Set radius last. Method relies on fully initialized class.
+        self.reachable_radius = self.__reachable_radius()
+
+    def is_position_reachable(self, target_position: Tuple[float]) -> bool:
+        if len(target_position) != 3:
+            raise Exception("Position must be a vector (x,y,z) given in base coordinates")
+
+        # First, do a quick check and make sure the point is within
+        # the spherical workspace of the robot.
+        dist_origin = np.linalg.norm(np.array(target_position))
+        if dist_origin > self.reachable_radius:
+            return False
+
+        # Next, it's necessary to solve the IK problem
+        ths = self.inverse_kinematics(target_position)
+
+        return True
+
     """
-    Calculate forward kinematics of the robot.
+    Calculate forward kinematics of the robot up to the provided
+    joint angles.
 
     Arguments:
-        joint_angles: The angle (in radians) of each joint
-        [optional] to_joint: If provided, only the forward kinematics up 
-            to the specified joint will be calculated.
+        joint_angles: The angle (in radians) of each joint. The first (0 index) element
+            corresponds to the first joint. Calulate up to joint i by only providing the
+            angles up to joint i
 
     Output:
         Returns the translation vector from base frame 0 
         to the last linkage's frame N
     """
-    def forward_kinematics(self, joint_angles: Tuple[float], to_joint = None) -> np.array:
-        if to_joint is None and len(joint_angles) != self.num_joints:
-            raise Exception("Please provide an angle for each joint")
-        elif to_joint is not None and len(joint_angles) > self.num_joints:
-            raise Exception("to_joint must be less than or equal to the number of joints")
-        elif to_joint is not None and to_joint < 1:
-            raise Exception("to_joint must be greater than or equal to 1")
+    def forward_kinematics(self, joint_angles: Tuple[float]) -> np.array:
+        to_joint = len(joint_angles)
 
-        if to_joint is None:
-            to_joint = self.num_joints
+        if to_joint > self.num_joints:
+            raise Exception("The number of joint angles cannot exceed the number of joints")
+        if to_joint <= 0:
+            raise Exception("The number of joint angles must be greater than 0")
 
         np_angles = np.array(joint_angles).reshape((len(joint_angles), 1))
-        full_dh = np.concatenate((self.dh_parameters, np_angles), axis=1)
+        full_dh = np.concatenate((self.dh_parameters[:to_joint,:], np_angles), axis=1)
 
         translations = self.__build_t_matrix(full_dh[0])
         for i in range(1, full_dh.shape[0]):
@@ -71,31 +105,35 @@ class ArticulatedRobot:
     Calculate the inverse kinematics
     Given a point, find a set of thetas that will make the robot reach that point.
 
-    This function makes use of the Jacobian transpose to
-    solve the inverse kinematics problem. This was chosen since it is simple
-    and efficient to calculate. There are issues with it, however, since this function
-    is not expected to control a robot, but rather decide whether a point is reachable,
-    it is sufficient for now.
-
-    Other inverse kinematic solution methods are explored here:
+    Inverse kinematic solution methods are explored here:
     http://graphics.cs.cmu.edu/nsp/course/15-464/Spring11/handouts/iksurvey.pdf
 
     Arguments:
         target_position: (x, y, z) tuple relative to the base (0) frame
+        solver_method: The method used to calculate the inverse kinematics. Valid methods are: 
+            - "jacobian_transpose"
+            - More to come. Defaults to "jacobian_transpose"
 
     Output:
         A set of joint angles that gets the robot within 0.01 of the specified point
     """
-    def inverse_kinematics(self, target_position: Tuple[float]) -> np.array:
+    def inverse_kinematics(self, target_position: Tuple[float], solver_method: string = "jacobian_transpose") -> np.array:
         if len(target_position) != 3:
             raise Exception("Position must be a vector (x,y,z) given in base coordinates")
 
+        # select the algorithm
+        if solver_method == "jacobian_transpose":
+            solver = self.__jacobian_transpose_solver
+        else:
+            raise Exception("The algorithm provided is not supported.")
+
+        # set constants
         allowed_err = 0.01
         max_displacement = 0.05
+        d_th_threshold = math.radians(5) # limit to 5 degrees
 
         # start calculation at theta = 0
         ths = np.zeros(self.num_joints)
-
         pos = self.forward_kinematics(ths)[:3, -1]
         err = target_position - pos
 
@@ -105,19 +143,15 @@ class ArticulatedRobot:
             if mag_e > max_displacement:
                 err = max_displacement * (err / np.linalg.norm(err))
 
-            # caculate jacobian
-            j = self.calc_jacobian(ths, final_pos=pos, linear_only=True)
-            j_tp = np.transpose(j)
+            # caculate change in theta
+            d_th = solver(ths, err)
 
-            # calculate alpha
-            a_com = j.dot(j_tp).dot(err)
-            a = np.dot(err, a_com) / np.dot(a_com, a_com)
-
-            # calculate delta theta using the Jacobian transpose
-            d_th = a * j_tp.dot(err)
+            # calculate alpha using the method from
+            # https://cseweb.ucsd.edu/classes/wi17/cse169-a/slides/CSE169_09.pdf
+            a = d_th_threshold / max(d_th_threshold, np.amax(abs(d_th)))
 
             # update theta
-            ths = ths + d_th
+            ths = ths + a * d_th
 
             # recalc position and error
             pos = self.forward_kinematics(ths)[:3, -1]
@@ -163,7 +197,7 @@ class ArticulatedRobot:
         for i in range(1, self.num_joints):
             # TODO optimize this so it doesn't have to recalculate the intermediate
             # translation matrices each time
-            t_mat = self.forward_kinematics(joint_angles, to_joint=i)
+            t_mat = self.forward_kinematics(joint_angles[:i])
             r_mat = t_mat[:3, :3]
             p_vec = t_mat[:3, -1]
 
@@ -179,10 +213,9 @@ class ArticulatedRobot:
             return np_jac[:3, :]
 
         return np_jac
-
     
     """
-    T matrix construction for link i
+    T matrix construction for link i for "modified" DH parameters
 
     Parameters:
         full_dh: Tuple of the 4 DH parameters for link i
@@ -200,3 +233,49 @@ class ArticulatedRobot:
             [np.sin(th_i) * np.sin(al_i), np.cos(th_i) * np.sin(al_i), np.cos(al_i), np.cos(al_i) * d_i],
             [0, 0, 0, 1],
         ])
+
+    """
+    Calculates the expected change in theta with the jacobian transpose.
+    This is one of many methods to iteratively generate the change in theta.
+
+    Arguments:
+        prev_ths: The previous thetas used to calculate the last end effector
+        position in an iterative IK solver
+        prev_err: The previous error between the expected position and the
+        current position of the end effector, derived from using prev_ths.
+
+    Output:
+        The change in thetas (delta theta) to be added to the previous
+        thetas in an IK solver.
+
+    """
+    def __jacobian_transpose_solver(self, prev_ths: np.array, prev_err: np.array):
+        # caculate jacobian
+        j = self.calc_jacobian(prev_ths, linear_only=True)
+
+        # calculate inverse of jacobian as the transpose
+        j_tp = np.transpose(j)
+
+        # calculate change in theta
+        d_th = j_tp.dot(prev_err)
+
+        return d_th
+
+    """
+    Calculates an upperbound on the max reach of the robot from the DH parameters.
+
+    THIS IS NOT THE EXACT MAX REACH (yet). 
+    This function calculates an upper bound. To calcualte the actual reach,
+    one would need to use gradient decent and maximize the distance formula.
+
+    Output:
+        A float representing the maximum reach of the robot measured from frame 0
+    """
+    def __reachable_radius(self) -> float:
+        radius = 0
+        for param in self.dh_parameters:
+            radius += np.linalg.norm(param[1:])
+        
+        return radius
+
+        

@@ -4,32 +4,33 @@ import unittest
 import numpy as np
 
 class TestArticulatedRobot(unittest.TestCase):
-    a2 = 1
-    d3 = 1
-    a3 = 1
-    d4 = 5
-
-    dh_params = [
-        (0, 0, 0),
-        (-1 * math.pi / 2, 0, 0),
-        (0, a2, d3),
-        (-1 * math.pi / 2, a3, d4),
-        (math.pi / 2, 0, 0),
-        (-1 * math.pi / 2, 0, 0),
-    ]
-
-    
+    """
+    Test robot with invalid alpha raises an exception
+    """
+    def test_invalid_alpha(self):
+        with self.assertRaises(Exception):
+            ArticulatedRobot([
+                (0, 0, 0),
+                (math.pi / 4, 0),
+            ])
 
     """
     Test with the Puma 560 robot DH parameters
     """
     def test_forward(self):
-        a2 = self.a2
-        d3 = self.d3
-        a3 = self.a3
-        d4 = self.d4
+        a2 = 1
+        d3 = 1
+        a3 = 1
+        d4 = 5
 
-        r = ArticulatedRobot(self.dh_params)
+        r = ArticulatedRobot([
+            (0, 0, 0),
+            (-1 * math.pi / 2, 0, 0),
+            (0, a2, d3),
+            (-1 * math.pi / 2, a3, d4),
+            (math.pi / 2, 0, 0),
+            (-1 * math.pi / 2, 0, 0),
+        ])
 
         # set joints
         ths = (
@@ -80,8 +81,20 @@ class TestArticulatedRobot(unittest.TestCase):
         np.testing.assert_allclose(r_actual, r_expected)
 
 
-    def test_inverse(self):
-        r = ArticulatedRobot(self.dh_params)
+    def test_inverse_reachable(self):
+        a2 = 1
+        d3 = 1
+        a3 = 1
+        d4 = 5
+
+        r = ArticulatedRobot([
+            (0, 0, 0),
+            (-1 * math.pi / 2, 0, 0),
+            (0, a2, d3),
+            (-1 * math.pi / 2, a3, d4),
+            (math.pi / 2, 0, 0),
+            (-1 * math.pi / 2, 0, 0),
+        ])
 
         goal = (-1, -1, 4)
         thetas = r.inverse_kinematics(goal)
