@@ -113,11 +113,20 @@ class TestArticulatedRobot(unittest.TestCase):
             (0, 1, 0),
         ])
 
-        self.assertTrue(r.is_position_reachable((0, 0, 0))) # fold back on itself.
-        self.assertTrue(r.is_position_reachable((2, 0, 0))) # all 0 thetas
-        self.assertTrue(r.is_position_reachable((1 + math.sin(math.pi / 2), 0, math.cos(math.pi / 2)))) # complex
-        self.assertFalse(r.is_position_reachable((math.sin(math.pi / 2), 0.1, math.cos(math.pi / 2)))) # invalid y direction
-        self.assertFalse(r.is_position_reachable((5, 5, 5))) # outside of workspace
+        # fold back on itself.
+        self.assertTrue(r.is_position_reachable((0, 0, 0)))
+
+        # all 0 thetas
+        self.assertTrue(r.is_position_reachable((2, 0, 0)))
+
+        # complex
+        self.assertTrue(r.is_position_reachable((1 + math.sin(math.pi / 2), 0, math.cos(math.pi / 2))))
+    
+        # invalid y direction
+        self.assertFalse(r.is_position_reachable((math.sin(math.pi / 2), 0.1, math.cos(math.pi / 2)))) 
+
+        # outside of workspace
+        self.assertFalse(r.is_position_reachable((5, 5, 5)))
 
     def test_point_reachable(self):
         a2 = 1

@@ -3,27 +3,10 @@ import string
 from typing import List, Tuple
 import numpy as np 
 
-"""
-ArticulatedRobot
-
-Represents a simple kinematic robot chain
-with only rotary joints. Prismatic joints
-can be added with ease later.
-
-Assume actuators are placed along the z
-axis at the common normal (the point where
-the x axis and z axis intersect - the origin).
-"""
 class ArticulatedRobot:
 
     """
-    DH Parameters
-
-    Tuple of three numbers per joint.
-    Assume the joints are all rotary joints for now.
-    alpha_i-1, a_i-1, d_i
-    
-    Brief description:
+    DH Parameters:
     a_i = the distance from Z_i to Z_i+1 measured along X_i
     alpha_i = the angle from Z_i to Z_i+1 measured about X_i
     d_i = the distance from X_i-1 to X_i measured along Z_i
@@ -33,8 +16,24 @@ class ArticulatedRobot:
 
     num_joints: int
 
-    reachable_radius: float
+    max_reach: float
+    min_reach: float
 
+    """
+    ArticulatedRobot
+
+    Represents a simple kinematic robot chain with only rotary joints. Prismatic joints
+    can be added with ease later.
+
+    Assume actuators are placed along the z axis at the common normal (the point where
+    the x axis and z axis intersect - the origin).
+    DH Parameters
+
+    Arguments:
+        dh_parameters: A list of tuples with length equal to the number of joints. 
+            The tuples should contain three numbers and represent the DH paramters
+            for that paricular joint: (alpha_i-1, a_i-1, d_i).
+    """
     def __init__(self, dh_parameters: List[Tuple[float]]) -> None:
         if len(dh_parameters) > 7:
             raise Exception("DH parameters must have 7 DOF or less.")
@@ -50,7 +49,8 @@ class ArticulatedRobot:
         self.num_joints = len(dh_parameters)
 
         # Set radius last. Method relies on fully initialized class.
-        self.reachable_radius = self.__reachable_radius()
+        self.max_reach = self.__max_reach()
+        self.min_reach = self.__min_reach()
 
     """
     Given a position (x,y,z), see if the robot can reach it.
@@ -62,19 +62,24 @@ class ArticulatedRobot:
     solvers, different thresholds, etc.
 
     Arguments:
-        target_position: (x, y, z) tuple relative to the base (0) frame
+        target_position: (x, y, z) tuple relative to the base (0) frame,
+        [optional] within_distance: If the robot can get within the distance specified, then
+            the position is considered reachable. Defaults to 0.1
 
     Output:
         True if the position is reachable, False if it is not.
     """
-    def is_position_reachable(self, target_position: Tuple[float]) -> bool:
+    def is_position_reachable(self, target_position: Tuple[float], within_distance: float = 0.1) -> bool:
         if len(target_position) != 3:
             raise Exception("Position must be a vector (x,y,z) given in base coordinates")
+
+        if within_distance <= 0:
+            raise Exception("within_distance must be positive.")
 
         # First, do a quick check and make sure the point is within
         # the spherical workspace of the robot.
         dist_origin = np.linalg.norm(np.array(target_position))
-        if dist_origin > self.reachable_radius:
+        if dist_origin > self.max_reach:
             return False
 
         # Next, it's necessary (and sufficient) to solve the IK problem
@@ -341,17 +346,29 @@ class ArticulatedRobot:
     Calculates an upperbound on the max reach of the robot from the DH parameters.
 
     THIS IS NOT THE EXACT MAX REACH (yet). 
-    This function calculates an upper bound. To calcualte the actual reach,
+    This function calculates an upper bound. To calculate the actual reach,
     one would need to use gradient decent and maximize the distance formula.
 
     Output:
         A float representing the maximum reach of the robot measured from frame 0
     """
-    def __reachable_radius(self) -> float:
+    def __max_reach(self) -> float:
         radius = 0
         for param in self.dh_parameters:
             radius += np.linalg.norm(param[1:])
         
         return radius
 
+    """
+    Calculates a lowerbound on the min reach of the robot from the DH parameters.
+
+    THIS IS NOT THE MIN REACH (yet)
+    This function assumes the closest the robot can get to the center
+    is the length of the first joint. This is VERY incorrect, but a good starting point.
+
+    Output:
+        A float representing the minimum reach of the robot measured from frame 0
+    """
+    def __min_reach(self) -> float:
+        return np.linalg.norm(self.dh_parameters[0][1:])
         
