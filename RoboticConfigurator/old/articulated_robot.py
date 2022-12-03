@@ -150,13 +150,20 @@ class ArticulatedRobot:
     """
     def inverse_kinematics(
         self, 
-        target_position: Tuple[float], 
+        target_position: Tuple[float] = None,
+        target_orientation: np.array = None,
         solver_method: string = "jacobian_transpose", 
         tolerance_threshold: float = 0.01,
         restart_threshold: int = 1) -> np.array:
 
-        if len(target_position) != 3:
+        if target_position is None and target_orientation is None:
+            raise Exception("Either target_position or target_orientation must be specified")
+
+        if target_position is not None and len(target_position) != 3:
             raise Exception("Position must be a vector (x,y,z) given in base coordinates")
+
+        if target_orientation is not None and (target_orientation.shape[0] != 3 or target_orientation.shape[1] != 3):
+            raise Exception("Orientation must be specified as 3x3 rotation matrix")
 
         if tolerance_threshold <= 0:
             raise Exception("tolerance_threshold must be a value larger than 0")
@@ -164,29 +171,98 @@ class ArticulatedRobot:
         if restart_threshold < 0:
             raise Exception("restart_threshold must be greater than or equal to 0")
 
-        # select the algorithm
-        if solver_method == "jacobian_transpose":
-            solver = self.__jacobian_transpose_solver
-        else:
+        if solver_method not in ["jacobian_transpose"]:
             raise Exception("The solver method provided is not supported.")
 
+        # build target translation matrix
+        if target_position is None:
+            target_position = np.zeros(3)
+            disable_position = True
+        else:
+            target_position = np.array(target_position)
+            disable_position = False
+
+        if target_orientation is None:
+            target_orientation = np.zeros((3, 3))
+            disable_orientation = True
+        else:
+            target_orientation = np.array(target_orientation)
+            disable_orientation = False
+
+        target_translation = self.__assemble_t(target_orientation, target_position)
+
         # set constants
-        clamp_threshold = 0.05
         d_th_threshold = math.radians(5) # limit to 5 degrees
-        err_th_threshold = 0.01
-        err_sim_count_threshold = 10
+        err_sim_count_threshold = 100
 
         # start calculation at theta = 0
         ths = np.zeros(self.num_joints)
-        pos = self.forward_kinematics(ths)[:3, -1]
-        err = target_position - pos
+        # ths = np.random.normal(0, 2 * math.pi, self.num_joints)
+        actual = self.forward_kinematics(ths)
+        err = self.__calc_error(
+            target_translation, 
+            actual, 
+            disable_position=disable_position,
+            disable_orientation=disable_orientation)
+
+        (prev_pos_err, prev_ori_err) = (math.inf, math.inf)
+
         err_sim_counter = 0
         restart_counter = 0
 
-        while np.linalg.norm(err) > tolerance_threshold:
-            # caculate change in theta
-            d_th = solver(ths, self.__clamp_err(err, clamp_threshold))
+        while True:
+            (pos_err, ori_err) = self.__err_magnitude(err)
 
+            # finish if within threshold
+            if pos_err <= tolerance_threshold and ori_err <= tolerance_threshold: 
+                break
+
+            # check if err changed
+            if (pos_err > tolerance_threshold and pos_err >= prev_pos_err) or (ori_err > tolerance_threshold and ori_err >= prev_ori_err):
+                err_sim_counter += 1
+
+            # if error hasn't changed in a while, we might be in a local minima
+            # or a singularity
+            if err_sim_counter >= err_sim_count_threshold:
+                if restart_counter > restart_threshold:
+                    raise Exception("Unable to meet the tolerance threshold")
+
+                # restart with random thetas
+                ths = np.random.normal(0, math.pi, self.num_joints)
+                actual = self.forward_kinematics(ths)
+                err = self.__calc_error(
+                    target_translation, 
+                    actual, 
+                    disable_position=disable_position,
+                    disable_orientation=disable_orientation)
+                (prev_pos_err, prev_ori_err) = (math.inf, math.inf)
+
+                err_sim_counter = 0
+                restart_counter += 1
+                continue
+
+            # caculate change in theta
+            match solver_method:
+                case "jacobian_transpose":
+                    # caculate jacobian
+                    j = self.calc_geometric_jacobian(ths)
+
+                    # calculate inverse of jacobian as the transpose
+                    j_tp = np.transpose(j)
+
+                    # prep position error
+                    cl_pos_err = self.__clamp_err(err[:3], clamp_threshold=0.05)
+
+                    # prep orientation error
+                    # L = -0.5*(self.__skew_m(t_rot[:,0])*self.__skew_m(a_rot[:,0]) + self.__skew_m(t_rot[:,1])*self.__skew_m(a_rot[:,1]) + self.__skew_m(t_rot[:,2])*self.__skew_m(a_rot[:,2]))
+                    # rot_err = L.dot(-1 * rot_err_cl)
+                    cl_rot_err = self.__clamp_err(err[3:], clamp_threshold=0.05)
+
+                    # calculate change in theta
+                    d_th = j_tp.dot(np.concatenate((cl_pos_err, cl_rot_err)))
+                case _:
+                    raise Exception("The solver method provided is not supported.")
+            
             # calculate alpha using the method from
             # https://cseweb.ucsd.edu/classes/wi17/cse169-a/slides/CSE169_09.pdf
             a = d_th_threshold / max(d_th_threshold, np.amax(abs(d_th)))
@@ -194,34 +270,21 @@ class ArticulatedRobot:
             # update theta
             ths = ths + a * d_th
 
-            # recalc position and error
-            pos = self.forward_kinematics(ths)[:3, -1]
-            next_err = target_position - pos
+            # recalc pose and error
+            actual = self.forward_kinematics(ths)
+            err = self.__calc_error(
+                target_translation, 
+                actual, 
+                disable_position=disable_position,
+                disable_orientation=disable_orientation)
 
-            # check if err changed
-            if np.linalg.norm(err - next_err) < err_th_threshold:
-                err_sim_counter += 1
-            else:
-                err_sim_counter = 0
-
-            # if error hasn't changed in a while, we might be in a local minima
-            if err_sim_counter >= err_sim_count_threshold:
-                if restart_counter + 1 > restart_threshold:
-                    raise Exception("Unable to meet the tolerance threshold", pos)
-
-                # restart with random thetas
-                ths = np.random.normal(0, math.pi, self.num_joints)
-                pos = self.forward_kinematics(ths)[:3, -1]
-                next_err = target_position - pos
-                err_sim_counter = 0
-                restart_counter += 1
-
-            err = next_err
+            # set previous error
+            (prev_pos_err, prev_ori_err) = (pos_err, ori_err)
 
         return ths
 
     """
-    Calculate the full jacobian
+    Calculate the full geometric jacobian
     We only need to handle rotary joints in the construction. This function
     does not consider prismatic joints.
     
@@ -233,10 +296,14 @@ class ArticulatedRobot:
             filled in, resulting in a 3xN np.array.
     
     Output:
-        The jacobian of the robot given the joint angles.
+        The geometric jacobian of the robot given the joint angles.
         Unless linear_only is True returns a 6xN np.array, where N is the number of joints.
     """
-    def calc_jacobian(self, joint_angles: np.array, final_pos: np.array = None, linear_only: bool = False):
+    def calc_geometric_jacobian(
+        self, 
+        joint_angles: np.array, 
+        final_pos: np.array = None, 
+        linear_only: bool = False):
         if joint_angles.shape[0] != self.num_joints:
             raise Exception("Please provide an angle for each joint")
 
@@ -300,7 +367,7 @@ class ArticulatedRobot:
     Reduces jitter by enforcing an upper bound on the error
 
     Arguments:
-        err: A (x, y, z) vector representing the error in each dimension
+        err: A (ex, ey, ez, ewx, ewy, ewz) vector representing the error in each dimension
         [optional] clamp_threshold: Float defining the upper bound.
             Defaults to 0.05
     """
@@ -314,33 +381,6 @@ class ArticulatedRobot:
             err = clamp_threshold * (err / np.linalg.norm(err))
 
         return err
-
-    """
-    Calculates the expected change in theta with the jacobian transpose.
-    This is one of many methods to iteratively generate the change in theta.
-
-    Arguments:
-        prev_ths: The previous thetas used to calculate the last end effector
-        position in an iterative IK solver
-        prev_err: The previous error between the expected position and the
-        current position of the end effector, derived from using prev_ths.
-
-    Output:
-        The change in thetas (delta theta) to be added to the previous
-        thetas in an IK solver.
-
-    """
-    def __jacobian_transpose_solver(self, prev_ths: np.array, prev_err: np.array):
-        # caculate jacobian
-        j = self.calc_jacobian(prev_ths, linear_only=True)
-
-        # calculate inverse of jacobian as the transpose
-        j_tp = np.transpose(j)
-
-        # calculate change in theta
-        d_th = j_tp.dot(prev_err)
-
-        return d_th
 
     """
     Calculates an upperbound on the max reach of the robot from the DH parameters.
@@ -371,4 +411,95 @@ class ArticulatedRobot:
     """
     def __min_reach(self) -> float:
         return np.linalg.norm(self.dh_parameters[0][1:])
-        
+
+    """
+    Calculate position and orientation error for a rotation matrix
+    orientation representation
+
+    Orientation error from Siciliano, Robotics modeling, planning, and control
+    
+    Output:
+        A 1 X 6 vector containing position error and rotation error.
+        (ex, ey, ez, ewx, ewy, ewz)
+    """
+    def __calc_error(
+        self,
+        target_translation: np.array, 
+        actual_translation: np.array,
+        disable_position: bool = False, 
+        disable_orientation: bool = False):
+
+        if disable_position and disable_orientation:
+            raise Exception("Must calculate error for either position or orientation")
+
+        pos_err = np.zeros(3)
+        rot_err = np.zeros(3)
+
+        a_rot = actual_translation[:3, :3]
+        a_pos = actual_translation[:3, -1]
+
+        t_rot = target_translation[:3, :3]
+        t_pos = target_translation[:3, -1]
+
+        if not disable_position:
+            pos_err = t_pos - a_pos
+
+        if not disable_orientation:
+            rot_err = 0.5*(np.cross(a_rot[:,0], t_rot[:,0])+np.cross(a_rot[:,1], t_rot[:,1])+np.cross(a_rot[:,2],t_rot[:,2]))
+
+        # r_vr = t_rot * a_rot.transpose()
+        # n_di = np.array([
+        #     r_vr[2][1] - r_vr[1][2],
+        #     r_vr[0][2] - r_vr[2][0],
+        #     r_vr[1][0] - r_vr[0][1],
+        # ])
+
+        # v = np.arccos((r_vr[0][0] + r_vr[1][1] + r_vr[2][2] - 1) / 2)
+        # r = (1 / (2 * math.sin(v))) * n_di
+
+        #  rot_err = r * math.sin(v)
+
+        return np.concatenate((pos_err, rot_err))
+
+    def __assemble_t(self, rot: np.array, pos: np.array):
+        res = np.concatenate((rot, np.array([pos]).transpose()), axis=1)
+        return np.concatenate((res, np.array([(0, 0, 0, 1)])))
+
+    def __err_magnitude(self, err: np.array):
+        return np.round((np.linalg.norm(err[:3]), np.linalg.norm(err[3:])), 5)
+
+    # """
+    # Calculate skew matrix from vector
+
+    # """
+    # def __skew_m(self, v: np.array):
+    #     if len(v) != 3:
+    #         raise Exception("Can only calulate skew matrix from 3 length vector")
+
+    #     return np.array([
+    #         [0, -1*v[2], v[1]],
+    #         [v[2], 0, -1*v[0]],
+    #         [-1*v[1], v[0], 0],
+    #     ])
+    
+    # def __invert_t(self, t: np.array):
+    #     r = t[:3,:3]
+    #     p = t[:3, -1]
+
+    #     r_inv = np.transpose(r)
+    #     p_inv = -1 * r_inv.dot(p)
+
+    #     return self.__assemble_t(r_inv, p_inv)
+    
+    # def __calc_error2(
+    #     self,
+    #     target_translation: np.array, 
+    #     actual_translation: np.array,
+    #     disable_position: bool = False, 
+    #     disable_orientation: bool = False):
+
+    #     if disable_position and disable_orientation:
+    #         raise Exception("Must calculate error for either position or orientation")
+
+    #     t_diff = self.__invert_t(actual_translation).dot(target_translation)
+    #     return np.log(t_diff)
