@@ -278,7 +278,6 @@ def convert_rot_matrix_euler(rot_m: np.ndarray) -> np.ndarray:
     Returns the Euler / Tait-Bryan angles in ZYX form from a rotation matrix.
     Also known as the nautical angles.
     """
-
     if rot_m.shape != (3,3):
         raise Exception("Matrix is not a rotation matrix")
 
@@ -296,3 +295,33 @@ def convert_rot_matrix_euler(rot_m: np.ndarray) -> np.ndarray:
         o_z = np.arctan2(rot_m[1,0]/np.cos(o_y), rot_m[0,0]/np.cos(o_y))
 
     return np.array((o_x, o_y, o_z))
+
+def convert_euler_to_rot(euler: np.ndarray) -> np.ndarray:
+    """
+    Returns a rotation matrix corresponding to the ZYX euler angles
+    """
+    if euler.shape != (3,):
+        raise Exception("Must provide 3 length vector XYZ euler angles")
+
+    return z_rot_matrix(euler[0]).dot(y_rot_matrix(euler[1])).dot(x_rot_matrix(euler[2]))
+    
+def x_rot_matrix(theta: float) -> np.ndarray:
+    return np.array([
+        (1,0,0),
+        (0,math.cos(theta),-1*math.sin(theta)),
+        (0,math.sin(theta),math.cos(theta)),
+    ])
+
+def y_rot_matrix(theta: float) -> np.ndarray:
+    return np.array([
+        (math.cos(theta),0,math.sin(theta)),
+        (0,1,0),
+        (-1*math.sin(theta),0,math.cos(theta)),
+    ])
+
+def z_rot_matrix(theta: float) -> np.ndarray:
+    return np.array([
+        (math.cos(theta), -1*math.sin(theta),0),
+        (math.sin(theta),math.cos(theta),0),
+        (0,0,1)
+    ])

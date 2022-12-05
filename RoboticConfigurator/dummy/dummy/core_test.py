@@ -1,6 +1,6 @@
 import math
 import numpy as np
-from .core import convert_rot_matrix_euler, forward_kinematics, inverse_kinematics
+from .core import convert_euler_to_rot, convert_rot_matrix_euler, forward_kinematics, inverse_kinematics
 from .Robot import Robot
 
 def test_fk():
@@ -9,14 +9,14 @@ def test_fk():
     a3 = 1
     d4 = 5
 
-    r = Robot([
+    r = Robot(np.array([
         (0, 0, 0),
         (-1 * math.pi / 2, 0, 0),
         (0, a2, d3),
         (-1 * math.pi / 2, a3, d4),
         (math.pi / 2, 0, 0),
         (-1 * math.pi / 2, 0, 0),
-    ])
+    ]))
 
     # set joints
     ths = (
@@ -72,14 +72,14 @@ def test_ik_position_reachable():
     a3 = 1
     d4 = 5
 
-    r = Robot([
+    r = Robot(np.array([
         (0, 0, 0),
         (-1 * math.pi / 2, 0, 0),
         (0, a2, d3),
         (-1 * math.pi / 2, a3, d4),
         (math.pi / 2, 0, 0),
         (-1 * math.pi / 2, 0, 0),
-    ])
+    ]))
 
     t_goal = np.array([
         [0, 0, -1, -1],
@@ -118,3 +118,29 @@ def test_convert_rot_matrix_euler():
     np.testing.assert_allclose(convert_rot_matrix_euler(rot_m1), np.array((0,0,0)))
     np.testing.assert_allclose(convert_rot_matrix_euler(rot_m2), np.array((math.pi/2,0,math.pi/2)))
     np.testing.assert_allclose(convert_rot_matrix_euler(rot_m3), np.array((0,math.pi/2,0)))
+
+def test_convert_euler_to_rot():
+    e1 = np.array((0,0,0))
+    rot1 = np.array([
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+    ])
+
+    e2 = np.array((math.pi/2,0,math.pi/2))
+    rot2 = np.array([
+        [0, 0, 1],
+        [1, 0, 0],
+        [0, 1, 0],
+    ])
+
+    e3 = np.array((0,math.pi/2,0))
+    rot3 = np.array([
+        [0, 0, 1],
+        [0, 1, 0],
+        [-1, 0, 0],
+    ])
+
+    np.testing.assert_allclose(rot1, np.round(convert_euler_to_rot(e1),2))
+    np.testing.assert_allclose(rot2, np.round(convert_euler_to_rot(e2),2))
+    np.testing.assert_allclose(rot3, np.round(convert_euler_to_rot(e3),2))

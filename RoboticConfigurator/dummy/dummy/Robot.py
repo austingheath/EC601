@@ -11,6 +11,7 @@ class Robot:
             The tuples should contain three numbers and represent the DH paramters
             for that paricular joint: (alpha_i-1, a_i-1, d_i).
         """
+        dh_parameters = np.array(dh_parameters)
 
         if len(dh_parameters.shape) != 2 or dh_parameters.shape[1] != 3:
             raise Exception("DH parameters must be a list of 3 length tuples.")
