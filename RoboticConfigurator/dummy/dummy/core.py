@@ -1,8 +1,11 @@
 import math
 from typing import Tuple
 import numpy as np
+from scipy.spatial.transform import Rotation as R
 
 from .Robot import Robot
+
+supported_solver_methods = ["jacobian_transpose", "jacobian_psuedo"]
 
 def forward_kinematics(robot: Robot, thetas: np.ndarray):
     to_joint = len(thetas)
@@ -30,7 +33,8 @@ def inverse_kinematics(
     target_position: np.ndarray = None,
     target_orientation: np.ndarray = None,
     solver_method: str = "jacobian_transpose", 
-    tolerance_threshold: float = 0.01,
+    allowed_pos_error: float = 0.1,
+    allowed_ori_error: float = 0.1,
     restart_threshold: int = 1) -> np.array:
 
     if target_position is None and target_orientation is None:
@@ -42,13 +46,13 @@ def inverse_kinematics(
     if target_orientation is not None and (target_orientation.shape[0] != 3 or target_orientation.shape[1] != 3):
         raise Exception("Orientation must be specified as 3x3 rotation matrix")
 
-    if tolerance_threshold <= 0:
-        raise Exception("tolerance_threshold must be a value larger than 0")
+    if allowed_pos_error <= 0 or allowed_ori_error <= 0:
+        raise Exception("allowed_pos_error/allowed_ori_error must be a value larger than 0")
 
     if restart_threshold < 0:
         raise Exception("restart_threshold must be greater than or equal to 0")
 
-    if solver_method not in ["jacobian_transpose"]:
+    if solver_method not in supported_solver_methods:
         raise Exception("The solver method provided is not supported.")
 
     # build target translation matrix
@@ -74,7 +78,6 @@ def inverse_kinematics(
 
     # start calculation at theta = 0
     ths = np.zeros(robot.num_joints)
-    # ths = np.random.normal(0, 2 * math.pi, self.num_joints)
     actual = forward_kinematics(robot, ths)
     err = err_between_t(
         target_translation, 
@@ -91,11 +94,11 @@ def inverse_kinematics(
         (pos_err, ori_err) = np.round((np.linalg.norm(err[:3]), np.linalg.norm(err[3:])), 5)
 
         # finish if within threshold
-        if pos_err <= tolerance_threshold and ori_err <= tolerance_threshold: 
+        if pos_err <= allowed_pos_error and ori_err <= allowed_ori_error: 
             break
 
         # check if err changed
-        if (pos_err > tolerance_threshold and pos_err >= prev_pos_err) or (ori_err > tolerance_threshold and ori_err >= prev_ori_err):
+        if (pos_err > allowed_pos_error and pos_err >= prev_pos_err) or (ori_err > allowed_ori_error and ori_err >= prev_ori_err):
             err_sim_counter += 1
 
         # if error hasn't changed in a while, we might be in a local minima
@@ -118,7 +121,7 @@ def inverse_kinematics(
             restart_counter += 1
             continue
 
-        # caculate change in theta
+        # calculate change in theta
         match solver_method:
             case "jacobian_transpose":
                 # caculate jacobian
@@ -127,25 +130,28 @@ def inverse_kinematics(
                 # calculate inverse of jacobian as the transpose
                 j_tp = np.transpose(j)
 
-                # prep position error
-                cl_pos_err = clamp_err_vector(err[:3], clamp_threshold=0.05)
+                # calculate change in theta
+                scaled_err = 0.05 * err
+                d_th = j_tp.dot(scaled_err)
+            case "jacobian_psuedo":
+                # caculate jacobian
+                j = calc_geometric_jacobian(robot, ths)
 
-                # prep orientation error
-                # L = -0.5*(self.__skew_m(t_rot[:,0])*self.__skew_m(a_rot[:,0]) + self.__skew_m(t_rot[:,1])*self.__skew_m(a_rot[:,1]) + self.__skew_m(t_rot[:,2])*self.__skew_m(a_rot[:,2]))
-                # rot_err = L.dot(-1 * rot_err_cl)
-                cl_rot_err = clamp_err_vector(err[3:], clamp_threshold=0.05)
+                # calculate psuedoinverse
+                j_tp = np.linalg.pinv(j)
 
                 # calculate change in theta
-                d_th = j_tp.dot(np.concatenate((cl_pos_err, cl_rot_err)))
+                scaled_err = 0.05 * err
+                d_th = j_tp.dot(scaled_err)
             case _:
                 raise Exception("The solver method provided is not supported.")
         
         # calculate alpha using the method from
         # https://cseweb.ucsd.edu/classes/wi17/cse169-a/slides/CSE169_09.pdf
-        a = d_th_threshold / max(d_th_threshold, np.amax(abs(d_th)))
+        # a = d_th_threshold / max(d_th_threshold, np.amax(abs(d_th)))
 
         # update theta
-        ths = ths + a * d_th
+        # ths = ths + a * d_th
 
         # recalc pose and error
         actual = forward_kinematics(robot, ths)
@@ -153,19 +159,23 @@ def inverse_kinematics(
             target_translation, 
             actual, 
             disable_position=disable_position,
-            disable_orientation=disable_orientation)
+            disable_orientation=disable_orientation,
+            solver_method=solver_method)
 
         # set previous error
         (prev_pos_err, prev_ori_err) = (pos_err, ori_err)
 
     return ths
 
-def calc_geometric_jacobian(robot: Robot, thetas: np.ndarray, final_pos: np.ndarray = None):
+def calc_jacobian(robot: Robot, thetas: np.ndarray, final_pos: np.ndarray = None, j_type: str = "geometric"):
     if thetas.shape[0] != robot.num_joints:
         raise Exception("Please provide an angle for each joint")
 
     if final_pos is not None and len(final_pos) != 3:
         raise Exception("final_pos must be a four length vector (x, y, z)")
+
+    if j_type not in ["geometric", "analytical"]:
+        raise Exception("Jacobian type must be geometric or analytical") 
 
     mlt = np.array([0, 0, 1])
 
@@ -193,7 +203,12 @@ def calc_geometric_jacobian(robot: Robot, thetas: np.ndarray, final_pos: np.ndar
 
         jacobian.append(fin)
 
-    np_jac = np.array(jacobian).transpose()
+    g_jac = np.array(jacobian).transpose()
+
+    if j_type == "geometric":
+        return g_jac
+
+    # Continue calculating the analytical jacobian
 
     return np_jac
 
@@ -215,6 +230,51 @@ def build_t_matrix(full_dh: np.ndarray) -> np.ndarray:
         [0, 0, 0, 1],
     ])
 
+def err_between_t(
+    target_translation: np.ndarray,
+    actual_translation: np.ndarray, 
+    disable_position: bool = False, 
+    disable_orientation: bool = False,
+    solver_method: str = "jacobian_transpose", 
+    ):
+    if disable_position and disable_orientation:
+        raise Exception("Must calculate error for either position or orientation")
+
+    if solver_method not in supported_solver_methods:
+        raise Exception("The solver method provided is not supported.")
+
+    pos_err = np.zeros(3)
+    rot_err = np.zeros(3)
+
+    act_pos = actual_translation[:3, -1]
+    act_rot = actual_translation[:3, :3]
+
+    ex_pos = target_translation[:3, -1]
+    ex_rot = target_translation[:3, :3]
+
+    # Calculate error in position
+    if not disable_position:
+        pos_err = ex_pos - act_pos
+
+    # Calculate error in orientation
+    if not disable_orientation:
+        match solver_method:
+            case "jacobian_transpose":
+                # Get diff in terms of a rot matrix
+                rot_diff = act_rot.transpose() * ex_rot
+
+                # Translate diff to angle-axis representation
+                rot_err = R.from_matrix(rot_diff).as_rotvec()
+
+            case "jacobian_psuedo":
+                # Get diff in terms of a rot matrix
+                rot_diff = act_rot.transpose() * ex_rot
+
+                # Translate diff to angle-axis representation
+                rot_err = R.from_matrix(rot_diff).as_rotvec()
+
+    return np.concatenate((pos_err, rot_err))
+
 def assemble_t_matrix(rotation_matrix: np.ndarray, position_vector: np.ndarray):
     """
     Creates the full translation matrix from a rotation matrix and position vector.
@@ -223,89 +283,10 @@ def assemble_t_matrix(rotation_matrix: np.ndarray, position_vector: np.ndarray):
     res = np.concatenate((rotation_matrix, np.array([position_vector]).transpose()), axis=1)
     return np.concatenate((res, np.array([(0, 0, 0, 1)])))
 
-def err_between_t(
-    target_translation: np.ndarray,
-    actual_translation: np.ndarray, 
-    disable_position: bool = False, 
-    disable_orientation: bool = False):
-
-    if disable_position and disable_orientation:
-        raise Exception("Must calculate error for either position or orientation")
-
-    pos_err = np.zeros(3)
-    rot_err = np.zeros(3)
-
-    a_rot = actual_translation[:3, :3]
-    a_pos = actual_translation[:3, -1]
-
-    t_rot = target_translation[:3, :3]
-    t_pos = target_translation[:3, -1]
-
-    if not disable_position:
-        pos_err = t_pos - a_pos
-
-    if not disable_orientation:
-        rot_err = 0.5*(np.cross(a_rot[:,0], t_rot[:,0])+np.cross(a_rot[:,1], t_rot[:,1])+np.cross(a_rot[:,2],t_rot[:,2]))
-
-    # r_vr = t_rot * a_rot.transpose()
-    # n_di = np.array([
-    #     r_vr[2,1] - r_vr[1,2],
-    #     r_vr[0,2] - r_vr[2,0],
-    #     r_vr[1,0] - r_vr[0,1],
-    # ])
-
-    # v = np.arccos((r_vr[0,0] + r_vr[1,1] + r_vr[2,2] - 1) / 2)
-    # r = (1 / (2 * math.sin(v))) * n_di
-
-    #  rot_err = r * math.sin(v)
-
-    return np.concatenate((pos_err, rot_err))
-
-def clamp_err_vector(err: np.ndarray, clamp_threshold: float = 0.05):
-    if clamp_threshold <= 0:
-        raise Exception("clamp_threshold must be greater than 0")
-
-    # clamp error so we make small iterative changes
-    mag_e = np.linalg.norm(err)
-    if mag_e > clamp_threshold:
-        err = clamp_threshold * (err / np.linalg.norm(err))
-
-    return err
-
-
-def convert_rot_matrix_euler(rot_m: np.ndarray) -> np.ndarray:
-    """
-    Returns the Euler / Tait-Bryan angles in ZYX form from a rotation matrix.
-    Also known as the nautical angles.
-    """
-    if rot_m.shape != (3,3):
-        raise Exception("Matrix is not a rotation matrix")
-
-    o_z = 0
-    if  math.isclose(rot_m[2,0], -1): 
-        o_y = math.pi/2 
-        o_x = o_z + np.arctan2(rot_m[0,1],rot_m[0,2]) 
-    elif math.isclose(rot_m[2,0], 1):
-        o_y = -1*math.pi/2 
-        o_x = -1*o_z + np.arctan2(-1*rot_m[0,1],-1*rot_m[0,2]) 
-    else:
-        # Standard case
-        o_y = -1 * np.arcsin(rot_m[2,0])
-        o_x = np.arctan2(rot_m[2,1]/np.cos(o_y), rot_m[2,2]/np.cos(o_y))
-        o_z = np.arctan2(rot_m[1,0]/np.cos(o_y), rot_m[0,0]/np.cos(o_y))
-
-    return np.array((o_x, o_y, o_z))
-
-def convert_euler_to_rot(euler: np.ndarray) -> np.ndarray:
-    """
-    Returns a rotation matrix corresponding to the ZYX euler angles
-    """
-    if euler.shape != (3,):
-        raise Exception("Must provide 3 length vector XYZ euler angles")
-
-    return z_rot_matrix(euler[0]).dot(y_rot_matrix(euler[1])).dot(x_rot_matrix(euler[2]))
-    
 def x_rot_matrix(theta: float) -> np.ndarray:
+    """
+    Create elementary matrix for rotation around X axis
+    """
     return np.array([
         (1,0,0),
         (0,math.cos(theta),-1*math.sin(theta)),
@@ -313,6 +294,9 @@ def x_rot_matrix(theta: float) -> np.ndarray:
     ])
 
 def y_rot_matrix(theta: float) -> np.ndarray:
+    """
+    Create elementary matrix for rotation around Y axis
+    """
     return np.array([
         (math.cos(theta),0,math.sin(theta)),
         (0,1,0),
@@ -320,6 +304,9 @@ def y_rot_matrix(theta: float) -> np.ndarray:
     ])
 
 def z_rot_matrix(theta: float) -> np.ndarray:
+    """
+    Create elementary matrix for rotation around Z axis
+    """
     return np.array([
         (math.cos(theta), -1*math.sin(theta),0),
         (math.sin(theta),math.cos(theta),0),

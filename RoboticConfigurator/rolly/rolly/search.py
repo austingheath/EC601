@@ -1,10 +1,11 @@
 import math
 import numpy as np
+from scipy.spatial.transform import Rotation as R
 
-from dummy.core import inverse_kinematics, x_rot_matrix, convert_euler_to_rot
+from dummy.core import inverse_kinematics, x_rot_matrix
 
-from RobotNode import RobotNode, create_node
-from utils import points_equal_distant, points_share_plane
+from .RobotNode import RobotNode, create_node
+from .utils import points_equal_distant, points_share_plane
 
 # Boundaries
 min_num_joints = 1
@@ -45,14 +46,15 @@ Future work:
 def search(
     points_only: np.ndarray = np.array([]), 
     orientations_only: np.ndarray = np.array([]), 
-    points_with_orientation: dict = dict()) -> RobotNode:
+    points_with_orientation: dict = dict(),
+    euler_seq: str = "xyz") -> RobotNode:
     
     verify_search_input(points_only, orientations_only, points_with_orientation)
     
     points = np.unique(np.array(points_only), axis=0)
     orientations = np.unique(np.array(orientations_only), axis=0)
 
-    orientation_mats = np.array([convert_euler_to_rot(o) for o in orientations])
+    orientation_mats = np.array([R.from_euler(euler_seq, o).as_matrix() for o in orientations])
     
     start_search = max_num_joints
 
@@ -154,6 +156,10 @@ def begin_search(
     for n_joints in range(starting_num_joints, max_num_joints + 1):
         for alpha in allowed_alphas:
             for a_len in range(0, max_dh_param_size, dh_param_step_size):
+                # Skip if only d_len value changes
+                if math.isclose(alpha, 0) and math.isclose(a_len, 0):
+                    continue
+
                 for d_len in range(0, max_dh_param_size, dh_param_step_size):
                     # generate DH params
                     dh_params = []
