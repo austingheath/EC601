@@ -12,12 +12,19 @@ min_num_joints = 1
 max_num_joints = 6
 max_dh_param_size = 1000 # mm
 dh_param_step_size = 100
-allowed_alphas = np.radians([90, -90, 0])
+allowed_alphas = np.radians([90, 0, -90])
 ik_tolerance_threshold = 100 # get within mm
 
 alpha_rots = [x_rot_matrix(a) for a in np.unique(np.abs(allowed_alphas), axis=0)]
 allowed_alpha_uvs_z = np.round(np.array([a.dot(np.array((0,0,1))) for a in alpha_rots]))
 allowed_alpha_uvs_x = np.round(np.array([a.dot(np.array((1,0,0))) for a in alpha_rots]))
+
+dh_params = []
+for alpha in allowed_alphas:
+    for a_len in range(0, max_dh_param_size, dh_param_step_size):
+        for d_len in range(0, max_dh_param_size, dh_param_step_size):
+            dh = (alpha, a_len, d_len)
+            dh_params.append(dh)
 
 """
 Just points:
@@ -123,7 +130,7 @@ def search(
     # TODO setup optimization for points & orientation
     
     print("Starting search with", start_search, "joint(s)")
-    return begin_search(start_search, points, orientations, points_with_orientation)
+    return begin_search(start_search, points, orientation_mats, points_with_orientation)
 
 def verify_search_input(points_only: np.ndarray, orientations_only: np.ndarray, points_with_orientation: dict):
     if points_only.shape[0] == 0 and orientations_only.shape[0] == 0 and len(points_with_orientation) == 0:
@@ -152,49 +159,87 @@ def begin_search(
         all_points = np.unique(np.append(points_only, list(points_with_orientation.keys()), axis=0))
     else:
         all_points = points_only
-    
-    for n_joints in range(starting_num_joints, max_num_joints + 1):
-        for alpha in allowed_alphas:
-            for a_len in range(0, max_dh_param_size, dh_param_step_size):
-                # Skip if only d_len value changes
-                if math.isclose(alpha, 0) and math.isclose(a_len, 0):
-                    continue
 
-                for d_len in range(0, max_dh_param_size, dh_param_step_size):
-                    # generate DH params
-                    dh_params = []
+    has_ori = len(orientations_only) > 0 or len(points_with_orientation) > 0
 
-                    for _ in range(n_joints):
-                        dh = (alpha, a_len, d_len)
-                        dh_params.append(dh)
+    for n_params in range(starting_num_joints + 1, max_num_joints + 2):
+        num_robots = len(dh_params) ** n_params
+        print(num_robots, "Possible robot combinations for", n_params, "DH parameters")
 
-                    # create robot
-                    robot_node = create_node(dh_params)
+        dhs_keys = dict()
 
-                    # check workspace first
-                    skip = False
-                    for point in all_points:
-                        radi = np.linalg.norm(point)
+        for dh_indexes in nd_range(0, len(dh_params), n_params):
+            dhs = []
+            for dh_index in dh_indexes:
+                dhs.append(dh_params[dh_index])
 
-                        if radi < robot_node.min_reach or radi > robot_node.max_reach:
-                            skip = True
-                            break
-                    
-                    if skip:
-                        continue
+            np_dhs = np.array(dhs)
+            list_dhs = np_dhs.flatten().tolist()
 
-                    # Then check inverse
-                    print("Trying", dh_params)
-                    for point in all_points:
-                        try:
-                            thetas = inverse_kinematics(robot_node.robot, target_position=point, allowed_pos_error=10, restart_threshold=100, solver_method="jacobian_psuedo")
-                        except Exception:
-                            skip = True
-                            break
-                    
-                    if not skip:
-                        return robot_node
+            # remove unnecessary angle from last joint if orientation not needed
+            dhs_key = tuple([list_dhs[i] for i in range(0, len(list_dhs)) if has_ori or i != len(list_dhs)-3])
+            if dhs_key in dhs_keys:
+                continue
+
+            # create robot
+            robot_node = create_node(np.array(dhs))
+            print("Trying key", dhs_key)
+
+            # check workspace first
+            skip = False
+            for point in all_points:
+                radi = np.linalg.norm(point)
+
+                if radi < robot_node.min_reach or radi > robot_node.max_reach:
+                    skip = True
+                    break
+            
+            if skip:
+                continue
+
+            # Check points
+            for point in all_points:
+                t_or = None
+                if tuple(point) in points_with_orientation:
+                    t_or = points_with_orientation[tuple(point)]
+
+                try:
+                    thetas = inverse_kinematics(
+                        robot_node.robot,
+                        target_position=point,
+                        target_orientation=t_or,
+                        allowed_pos_error=10,
+                        restart_threshold=100,
+                        solver_method="jacobian_psuedo")
+                except Exception:
+                    skip = True
+                    break
+            
+            if skip:
+                continue
+
+            # Check remaining orientations
+            for orientation in orientations_only:
+                try:
+                    thetas = inverse_kinematics(
+                        robot_node.robot,
+                        target_orientation=orientation,
+                        allowed_pos_error=10,
+                        restart_threshold=100,
+                        solver_method="jacobian_psuedo")
+                except Exception:
+                    skip = True
+                    break
+            
+            if not skip:
+                return robot_node
                     
     raise Exception("Could not find robot")
 
-                    
+def nd_range(start, stop, dims):
+  if not dims:
+    yield ()
+    return
+  for outer in nd_range(start, stop, dims - 1):
+    for inner in range(start, stop):
+      yield outer + (inner,)
