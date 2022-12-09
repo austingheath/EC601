@@ -1,174 +1,125 @@
-import React, { ChangeEvent, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
-import { Box, Button, Chip, MenuItem, Paper, TextField, Typography } from '@mui/material';
+import { Box, CircularProgress, Paper, Typography } from '@mui/material';
 
-type ConfiguratorState = {
-  currentPoint: string;
-  currentOrientation: string;
+import { StartForm } from './StartForm';
+import { ViewRobot } from './ViewRobot';
+
+export type RobotData = {
   points: number[][];
   orientations: number[][];
-  euler: string;
-  pointError: boolean;
-  orientationError: boolean;
+  orientationSequence: string;
 };
 
-const eulerOptions = ['XYZ', 'ZYX', 'ZYZ'];
+export type ApiResponse =
+  | { error: false; robot_dh: number[][]; num_joints: number }
+  | { error: true; message: string };
+
+type StartFormState =
+  | {
+      view: 'start';
+    }
+  | {
+      view: 'loading';
+      info: RobotData;
+    }
+  | {
+      view: 'ready';
+      response: ApiResponse;
+    };
 
 export function Configurator() {
-  const [state, setState] = useState<ConfiguratorState>({
-    currentPoint: '',
-    currentOrientation: '',
-    points: [],
-    orientations: [],
-    euler: 'XYZ',
-    pointError: false,
-    orientationError: false,
+  const [state, setState] = useState<StartFormState>({
+    view: 'start',
   });
 
-  const onPointChange = (ev: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setState((s) => ({ ...s, currentPoint: ev.target.value }));
-  };
+  useEffect(() => {
+    const fetchRobot = async (info: RobotData) => {
+      const res = await getRobot(info.points, info.orientations, info.orientationSequence);
+      setState((s) => ({ ...s, response: res, view: 'ready' }));
+    };
 
-  const onOriChange = (ev: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setState((s) => ({ ...s, currentOrientation: ev.target.value }));
-  };
-
-  const onOriRepChange = (ev: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setState((s) => ({ ...s, euler: ev.target.value }));
-  };
-
-  const onAddPoint = () => {
-    try {
-      const v = processVector(state.currentPoint);
-      setState((s) => ({ ...s, pointError: false, currentPoint: '', points: [...s.points, v] }));
-    } catch (e) {
-      setState((s) => ({ ...s, pointError: true }));
+    if (state.view === 'loading') {
+      fetchRobot(state.info);
     }
+  }, [state]);
+
+  const setRobotInfo = (info: RobotData) => {
+    setState({ view: 'loading', info });
   };
 
-  const onAddOrientation = () => {
-    try {
-      const v = processVector(state.currentOrientation);
-      setState((s) => ({
-        ...s,
-        orientationError: false,
-        currentOrientation: '',
-        orientations: [...s.orientations, v],
-      }));
-    } catch (e) {
-      setState((s) => ({ ...s, orientationError: true }));
+  const onReset = () => {
+    setState({ view: 'start' });
+  };
+
+  let body = <StartForm setRobotInfo={setRobotInfo} />;
+  switch (state.view) {
+    case 'loading': {
+      body = (
+        <Box
+          component="div"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flex: 1,
+          }}
+        >
+          <CircularProgress />
+          <Typography variant="body1" mt={2}>
+            This might take awhile...
+          </Typography>
+        </Box>
+      );
+      break;
     }
-  };
-
-  const onRemovePoint = (index: number) => {
-    setState((s) => {
-      const copy = [...s.points];
-      copy.splice(index, 1);
-      return { ...s, points: copy };
-    });
-  };
-
-  const onRemoveOrientation = (index: number) => {
-    setState((s) => {
-      const copy = [...s.orientations];
-      copy.splice(index, 1);
-      return { ...s, orientations: copy };
-    });
-  };
+    case 'ready': {
+      body = <ViewRobot apiRes={state.response} onReset={onReset} />;
+      break;
+    }
+  }
 
   return (
     <Paper
       style={{
         width: 600,
-        padding: 10,
+        padding: 20,
+        minHeight: 300,
+        display: 'flex',
       }}
     >
-      <Typography variant="h3" color="primary">
-        Robotic Configurator
-      </Typography>
-      <Typography variant="caption" color="text.secondary">
-        Provide your desired points and orientations. We&apos;ll do the rest.
-      </Typography>
-      <Box component="div" mt={3} mb={1}>
-        {state.points.map((point, i) => (
-          <Chip
-            key={i + '' + point}
-            label={vectorToString(point)}
-            onDelete={() => onRemovePoint(i)}
-          />
-        ))}
-      </Box>
-      <TextField
-        label="Add points"
-        onChange={onPointChange}
-        value={state.currentPoint}
-        size="small"
-        fullWidth
-        style={{ marginTop: 10 }}
-      />
-      <Button variant="outlined" onClick={onAddPoint} style={{ marginTop: 5 }}>
-        Add Point
-      </Button>
-      <Box component="div" mb={1}>
-        {state.orientations.map((ori, i) => (
-          <Chip key={i + '' + ori} label={vectorToString(ori)} onDelete={() => onRemovePoint(i)} />
-        ))}
-      </Box>
-      <TextField
-        label="Add orientations"
-        onChange={onOriChange}
-        value={state.currentOrientation}
-        size="small"
-        fullWidth
-        style={{ marginTop: 10 }}
-      />
-      <Button variant="outlined" onClick={onAddOrientation} style={{ marginTop: 5 }}>
-        Add Orientation
-      </Button>
-
-      <Box component="div" mt={3}>
-        <TextField
-          label="Select orientation representation"
-          value={state.euler}
-          onChange={onOriRepChange}
-          size="small"
-          select
-          fullWidth
-        >
-          {eulerOptions.map((e) => (
-            <MenuItem key={e} value={e}>
-              {e}
-            </MenuItem>
-          ))}
-        </TextField>
-      </Box>
-      <Button variant="contained" fullWidth style={{ marginTop: 20 }}>
-        Submit
-      </Button>
+      {body}
     </Paper>
   );
 }
 
-function processVector(vector: string) {
-  const p = vector.replaceAll('(', '').replaceAll(')', '');
-  const ds = p.split(',');
-
-  if (ds.length !== 3) {
-    throw new Error('Vector must be formatted properly');
-  }
-
-  const result = [];
+async function getRobot(
+  points: number[][],
+  orientations: number[][],
+  orientationSequence: string,
+): Promise<ApiResponse> {
+  let response: Response;
   try {
-    result.push(parseFloat(ds[0]));
-    result.push(parseFloat(ds[1]));
-    result.push(parseFloat(ds[2]));
+    response = await fetch('http://localhost:5000/api/robots/create', {
+      method: 'POST',
+      body: JSON.stringify({ points, orientations, orientationSequence }),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
   } catch (e) {
-    throw new Error('Vector must be formatted properly');
+    return { error: true, message: (e as Error).message };
   }
 
-  return result;
-}
+  if (response.status > 399) {
+    return { error: true, message: `Status was ${response.status}` };
+  }
 
-function vectorToString(vector: number[]) {
-  return `(${vector[0]}, ${vector[1]}, ${vector[2]})`;
+  try {
+    const json = await response.json();
+    return json as ApiResponse;
+  } catch (e) {
+    return { error: true, message: (e as Error).message };
+  }
 }

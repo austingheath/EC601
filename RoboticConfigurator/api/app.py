@@ -1,10 +1,14 @@
 from flask import Flask, request
 import numpy as np
 from rolly.search import search
+from flask_cors import CORS, cross_origin
 
 app = Flask(__name__)
+cors = CORS(app)
+app.config['CORS_HEADERS'] = 'Content-Type'
 
 @app.post("/api/robots/create")
+@cross_origin()
 def robot_create():
     content_type = request.headers.get('Content-Type')
     if (content_type == 'application/json'):
@@ -37,6 +41,6 @@ def robot_create():
 
     return {
         "error": False,
-        "robot_dh": robot_node.robot.dh_parameters,
+        "robot_dh": robot_node.robot.dh_parameters.tolist(),
         "num_joints": robot_node.robot.num_joints,
     }

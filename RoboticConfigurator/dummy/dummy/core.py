@@ -125,7 +125,7 @@ def inverse_kinematics(
         match solver_method:
             case "jacobian_transpose":
                 # caculate jacobian
-                j = calc_geometric_jacobian(robot, ths)
+                j = calc_jacobian(robot, ths)
 
                 # calculate inverse of jacobian as the transpose
                 j_tp = np.transpose(j)
@@ -135,7 +135,7 @@ def inverse_kinematics(
                 d_th = j_tp.dot(scaled_err)
             case "jacobian_psuedo":
                 # caculate jacobian
-                j = calc_geometric_jacobian(robot, ths)
+                j = calc_jacobian(robot, ths)
 
                 # calculate psuedoinverse
                 j_tp = np.linalg.pinv(j)

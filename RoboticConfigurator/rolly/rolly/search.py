@@ -187,8 +187,7 @@ def begin_search(
                     print("Trying", dh_params)
                     for point in all_points:
                         try:
-                            thetas = inverse_kinematics(robot_node.robot, target_position=point, tolerance_threshold=10, restart_threshold=100)
-                            print(thetas)
+                            thetas = inverse_kinematics(robot_node.robot, target_position=point, allowed_pos_error=10, restart_threshold=100, solver_method="jacobian_psuedo")
                         except Exception:
                             skip = True
                             break
